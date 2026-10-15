@@ -168,6 +168,18 @@ Import examples:
     python scripts/litwatch.py metrics import --workspace WORKSPACE --provider cas --file CAS.csv --year 2025
     python scripts/litwatch.py metrics status --workspace WORKSPACE
 
+Preferred canonical CSV layouts are:
+
+- JCR: `Journal,ISSN,EISSN,Category,Quartile,Impact Factor`
+- CAS: `Journal,ISSN,EISSN,Major Category,Major Zone,Minor Category,Minor Zone,Top`
+
+Save CSV as UTF-8 and provide at least one of Journal, ISSN, or EISSN. In JCR
+long form, use one journal/category pair per row and repeat the journal-year JIF
+on every category row. In CAS long form, use one journal/minor-category pair per
+row, repeat major fields, and leave minor fields blank when only a major zone is
+known. Zones must be 1-4; Top accepts yes/no, true/false, 1/0, or 是/否. Leave
+unknown values blank rather than inferring them.
+
 `--year` is required and identifies the metric edition, not a paper publication
 year. Input may be long form, with one journal/category combination per row, or
 a common wide layout. Wide JCR columns such as `Category_1` and

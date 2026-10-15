@@ -19,8 +19,10 @@ snowballing, paper analysis, deep reading, critical appraisal, research
 monitoring, daily literature tracking, preprint tracking, JCR quartile, CAS
 partition.
 
-> New here? Read “Quick start,” “Where to put seeds and journal-metric files,”
-> and “Usage mode 1 — ask an AI agent.” The rest is a reference manual.
+> New here? Read “Quick start” and “Usage mode 1 — ask an AI agent.” Read
+> “Where to put seeds and journal-metric files” only when organizing local
+> inputs, and the JCR/CAS section only when you need journal filters. You do not
+> need to learn the command line first.
 
 ## Quick start
 
@@ -341,16 +343,10 @@ Or tell the model:
     `seed list`, show me what was added, then preview the search without saving
     it (a dry run).
 
-Metric files are separate from seeds. Import only the JCR or historical CAS data
-you actually need. Merely placing a CSV under `WORKSPACE/local-metrics/` does not
-enable it; tell the model exactly which file, provider, and edition to import:
-
-    Use $litwatch with <YOUR_WORKSPACE>. Import my <CSV PATH> as provider
-    <jcr OR cas> for edition <YEAR>. Run `metrics status` and tell me how many
-    journals were imported. Then apply <EXACT JCR QUARTILE/JIF OR CAS
-    MAJOR/MINOR RULE>. Mark missing or conflicting data as “needs review” unless
-    I explicitly request exclusion. Follow the provenance and no-table rules in
-    “Using JCR, CAS partitions, and impact factors” below.
+Metric files are separate from seeds. Merely placing a CSV under
+`WORKSPACE/local-metrics/` does not enable it. When you need a partition or JIF,
+copy the single model prompt at the start of “Using JCR, CAS partitions, and
+impact factors.” It covers an existing CSV, an Excel export, or no table at all.
 
 ## Usage mode 1 — ask an AI agent
 
@@ -372,32 +368,11 @@ you want discovery, automatic daily monitoring, or deep reading.
 
 ### Search with journal filters
 
-Replace the path, year, and filter below, then copy this prompt to the model:
-
-    Use $litwatch with <YOUR_WORKSPACE>. First inspect the provenance notes,
-    filename, fields, and edition year of <CSV path>. Do not treat the
-    `--provider` option alone as proof that a file is an official export.
-
-    For JCR data, name Clarivate Journal Citation Reports as the source and
-    retain the edition year. Report “JCR <year> <category> <Q1-Q4>” and attach
-    the year to JIF. For CAS data, name the Chinese Academy of Sciences National
-    Science Library Journal Partition Table and retain major/minor scope. The
-    2025 edition is the final official historical CAS edition; do not call a
-    post-2025 third-party ranking an official CAS partition. If provenance
-    cannot be verified, say “user-supplied JCR/CAS-format data; official source
-    not verified” rather than endorsing it.
-
-    Import the data, run `metrics status`, and report its edition and journal
-    coverage. Then find related papers meeting <JCR Q1/Q2, CAS major-zone 1/2,
-    or JIF threshold>. For every paper show the metric source, edition year,
-    JCR category or CAS major/minor scope, and whether best or worst aggregation
-    was used. Never label OpenAlex 2-year mean citedness as JIF or a partition.
-    Keep missing or conflicting metrics as needs review. Deeply interpret no
-    more than three papers that also pass the full-text evidence gate.
-
-A prompt can require the model to inspect available evidence, but it cannot
-prove a CSV's license or authenticity from nothing. Formal decisions should use
-valid records from Clarivate, the former CAS publisher, or the user's institution.
+You do not need to study field mappings or commands first. Use the single prompt
+under “Simplest method — give this to the model” below. Attach your file if you
+have one; without a table, LitWatch can still search by topic. A model cannot
+prove official provenance from a filename alone, so formal decisions should use
+valid publisher or institutional records.
 
 ### Continue an existing watch
 
@@ -696,70 +671,89 @@ By default LitWatch displays journal metrics but does not remove a paper because
 its journal ranks lower. A journal-wide metric is not the quality of one paper.
 Metrics exclude papers only when you explicitly enable a required condition.
 
-### Where the partitions and metrics come from
+### Simplest method — give this to the model
 
-| LitWatch label | Original publisher and source | Meaning | How LitWatch gets it |
-|---|---|---|---|
-| `JCR <year> Q1–Q4`, `JIF` | [Clarivate Journal Citation Reports](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/) | A journal's JIF rank quartile within a JCR category, plus the edition's JIF; one journal may have different quartiles in different categories | The user imports an authorized JCR CSV and declares its edition year |
-| `CAS <year> major/minor 1–4` | [Chinese Academy of Sciences National Science Library Journal Partition Table](https://www.fenqubiao.com/) | A historical major/minor category system distinct from JCR Q1–Q4 | The user imports an authorized historical table and declares its edition year |
-| `OpenAlex 2-year mean citedness` | [OpenAlex Sources data](https://help.openalex.org/data/sources/attributes/) | A public two-year citation statistic; **not a partition and not Clarivate JIF** | Read automatically during online discovery; no local table is needed |
+Replace the angle-bracketed text; write `unsure` when you do not know the edition
+or rule. Attach a file or add its local path when you have one; the same prompt
+also works without a table:
 
-Clarivate assigns JCR quartiles within subject categories, so “JCR Q1” always
-belongs to an edition and category rather than being a permanent property of a
-journal. CAS partitions are a separate system and cannot be converted to or
-from JCR Q1–Q4.
+    Use $litwatch with <YOUR_WORKSPACE>. I want to use <JCR quartiles/JIF/
+    historical CAS partitions>, edition <YEAR>, with this rule: <for example
+    JCR Q1/Q2, JIF at least 5, or CAS major zones 1/2>.
 
-### Decide which situation applies first
+    If I supplied a file, inspect only its local provenance notes, edition,
+    worksheets, encoding, and headers first. If it is Excel and this environment
+    can read it, convert the needed worksheet locally to CSV UTF-8 and normalize
+    it to the recommended JCR or CAS long-table layout in the README. Otherwise,
+    tell me which worksheet to save with spreadsheet software; do not pretend it
+    was imported. Show the headers and a small preview; do not upload, publish,
+    or overwrite the source. Once it is parseable, import it, run
+    `metrics status`, report the edition, row count, and journal count, then run
+    one dry preview.
 
-| Your situation | What to do |
-|---|---|
-| You already have a JCR/CAS CSV | Check publisher, edition, and headers; import it; then run `metrics status` |
-| You have an official Excel export | Save the needed worksheet locally as CSV UTF-8; the metric importer does not read XLSX |
-| You have no partition table | Search normally with JCR/CAS/JIF hard filters off; report those fields as unavailable |
-| You found a table of unclear origin online | Do not call it official; ask a library or data administrator for a traceable edition |
-| You do not know what your file is | Ask the model to inspect only its notes, sheets, and headers before importing or claiming provenance |
+    If I do not have an authorized table, do not fetch an unverified mirror,
+    guess partitions, or label OpenAlex 2-year mean citedness as JIF. Tell me
+    which official route, edition, categories, and format I should request.
+    Meanwhile disable JCR/CAS/JIF hard filters and search by topic relevance.
 
-### How authorized data is normally obtained
+    Preserve source, edition, JCR category or CAS major/minor scope in every
+    result. Keep missing or conflicting values as needs review unless I
+    explicitly request strict exclusion. Deeply interpret at most three papers
+    that both pass the rules and have readable full text; never pad the count.
 
-**JCR/JIF:** JCR is a Clarivate subscription product, commonly accessed through
-a university, hospital, research institute, library, or individual entitlement.
-In Browse Journals, select the required edition, category, and filters, then
-export CSV or Excel. Clarivate's current help states that each export contains
-the first 600 sorted records; the JCR application has not offered a full bulk
-download since March 2022. Larger repeatable access requires the institution to
-confirm a separately licensed Web of Science Journals API rather than asking a
-model to assemble a table from the web. See Clarivate's
-[browse/export help](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals),
-[download limits](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351328522257-Downloading-Information),
-and [Journals API](https://developer.clarivate.com/apis/wos-journal).
+This covers an existing CSV, an Excel export, no table, and uncertain
+provenance. A model can inspect evidence but cannot invent proof of a file's
+license or authenticity.
 
-**Historical CAS partitions:** The official platform is
-[fenqubiao.com](https://www.fenqubiao.com/). Its
-[help page](https://www.fenqubiao.com/user/Help.aspx) describes institutional,
-CARSI, and personal access and batch-query downloads where permitted. The
-Chinese Academy of Sciences National Science Library has
-[announced](https://www.cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html)
-that it stopped updates from 2026, making **2025 the final official historical
-CAS edition**. Any later third-party ranking must name its real publisher rather
-than being called an official CAS partition.
+### Recommended table layouts
 
-If an authorized portal exports Excel, save the relevant worksheet as CSV UTF-8
-inside the authorized local environment. Do not upload a licensed full table to
-an unknown conversion service. A model may inspect headers locally, convert the
-file, and create a `--mapping`; a filename, `--provider jcr/cas`, or web search
-cannot by itself establish authenticity or usage rights.
+LitWatch accepts several common headers and wide exports, but these long layouts
+are easiest to inspect and reproduce. Save them as **CSV UTF-8**. Fill at least
+one of `Journal`, `ISSN`, or `EISSN`; retain an ISSN whenever available.
 
-### What if no table is available?
+**JCR/JIF: one journal-category pair per row**
 
-That is not an error. Discovery, deduplication, ranking, reporting, and lawful
-full-text interpretation still work. Keep `filters.metrics.hard_filter=false`,
-or at least leave all JCR/CAS/JIF requirements disabled. LitWatch may display the
-public `OpenAlex 2-year mean citedness` during online discovery, but it is not JIF
-and cannot be converted to JCR Q1–Q4 or CAS zones 1–4. If a formal partition is
-required, ask the institution's library, research office, or database
-administrator for the needed edition, categories, and permitted export format.
+| Journal | ISSN | EISSN | Category | Quartile | Impact Factor |
+|---|---|---|---|---|---|
+| `<journal>` | `1234-5678` | `8765-4321` | `<JCR category>` | `Q1` | `8.5` |
 
-### Where to put the file and how to import it
+Repeat a multi-category journal on multiple rows and repeat that edition's JIF
+on every row. Use `Q1`–`Q4`; leave unknown values blank rather than inferring them.
+
+**Historical CAS: one journal-minor-category pair per row**
+
+| Journal | ISSN | EISSN | Major Category | Major Zone | Minor Category | Minor Zone | Top |
+|---|---|---|---|---|---|---|---|
+| `<journal>` | `1234-5678` | `8765-4321` | `<major category>` | `1` | `<minor category>` | `2` | `yes` |
+
+Use zones `1`–`4`. Leave the minor columns blank when only a major zone is
+available; repeat the major fields when a journal has several minor categories.
+`Top` accepts `yes/no` (also `true/false`, `1/0`, or `是/否`). Never place JCR
+Q1–Q4 values in CAS zone columns.
+
+### Where to obtain partitions, and what to do without them
+
+| Needed data | Official route and typical access | If unavailable |
+|---|---|---|
+| JCR quartile / JIF | Use institutional or individual access to [Clarivate JCR](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/), select an edition and categories, then export CSV/Excel | Ask a library or database administrator for the needed edition, categories, and permitted export; do not have a model assemble an unofficial web table |
+| Historical CAS partition | Use authorized institutional or individual access to [fenqubiao.com](https://www.fenqubiao.com/) | Ask a library or research office; 2025 is the final official historical edition, so later third-party lists are not official CAS partitions |
+| Neither | No table is required | Leave hard filters off, search normally, and mark these fields unavailable |
+
+Clarivate's [export help](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals)
+states that the web interface exports the first 600 sorted records at a time;
+full-dataset access is not offered there, and larger use requires separately
+confirmed [Journals API](https://developer.clarivate.com/apis/wos-journal)
+rights. The CAS platform [help](https://www.fenqubiao.com/user/Help.aspx) covers
+institutional, CARSI, personal, and permitted batch access; its discontinuation
+is documented in the [official notice](https://www.cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html).
+
+JCR Q1–Q4 always belongs to a specific edition and category. Historical CAS is
+a different system; neither can be converted into the other. Public
+`OpenAlex 2-year mean citedness` is also neither JIF nor a partition. An
+unverified file may be tested, but label it “user-supplied JCR/CAS-format data;
+official source not verified.”
+
+### Auxiliary method — place and import files yourself
 
 A metric file may live anywhere the model and CLI can read. For easier local
 management, keep it under the runtime workspace's `local-metrics/`, never in a
@@ -776,45 +770,11 @@ Copying the file there has no effect until it is explicitly imported:
     python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "WORKSPACE/local-metrics/YOUR-CAS-FILE.csv" --year 2025
     python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
-`--year` is the **metric edition**, not a paper's publication year. The JCR year
-and filenames above are examples; replace them with the real edition. There is
-no official 2026 CAS edition. The importer accepts long tables and common wide
-layouts, including JCR `Category_1` / `IF Quartile(2025)_1` and CAS
-`ISSN/EISSN` / `大类分区` / `小类1分区`; unusual headers can use `--mapping`.
-The source CSV is not copied. SQLite stores normalized rows, provider, edition,
-import time, and SHA-256, so retain the original under your own license and
-backup policy.
-
-### Three prompts to copy into an AI model
-
-**I have a table:**
-
-    Use $litwatch with <YOUR_WORKSPACE>. I am authorized to use <CSV PATH>
-    locally; it is described as <JCR or historical CAS> <EDITION YEAR>. First
-    inspect its provenance notes, encoding, and headers. Do not treat its name or
-    `--provider` as proof that it is official. Create a local mapping if needed,
-    import it, then run `metrics status` and report the edition, row count, and
-    journal count. Apply <EXACT QUARTILE/JIF/ZONE RULE>, showing provider,
-    edition, category or major/minor scope, and aggregation for each paper. Keep
-    missing or conflicting values as needs review; never infer them.
-
-**I have no table:**
-
-    Use $litwatch with <YOUR_WORKSPACE>. I do not have an authorized JCR or CAS
-    table. Do not download an unverified mirror, guess partitions, or label
-    OpenAlex 2-year mean citedness as JIF. Disable JCR/CAS/JIF hard filters and
-    search by topic relevance; mark those fields unavailable. If you display the
-    OpenAlex metric, keep its full name. Tell me which edition, categories, and
-    export format I should request from my institution's library later.
-
-**I am unsure what my file contains:**
-
-    Use $litwatch, but do not import <FILE PATH> yet. Inspect only the local file
-    type, worksheets, headers, provenance notes, and edition. Explain whether it
-    resembles JCR, historical CAS, or an unknown format and what remains
-    unverified. If it is XLSX, tell me which worksheet should be saved as CSV
-    UTF-8. Do not upload, publish, alter the source, or enable hard filters until
-    I confirm.
+`--year` is the **metric edition**, not a paper's publication year. The year and
+filenames above are examples. The source CSV is not copied; SQLite stores
+normalized rows, provider, edition, import time, and SHA-256, so retain the
+original under your own license and backup policy. See
+`references/configuration.md` for unusual headers, wide layouts, and `--mapping`.
 
 ### Why the partition tables are not in this repository
 

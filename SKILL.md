@@ -3,7 +3,7 @@ name: litwatch
 description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, one-off or scheduled daily literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “每天追踪文献”, “每日文献监测”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: MIT
 metadata:
-  version: "2.3.7"
+  version: "2.3.8"
   schema-version: "1"
 ---
 
@@ -60,9 +60,14 @@ with its absolute path.
 
    If the user requests JCR, CAS, or JIF screening, read
    [configuration.md](references/configuration.md), then run `metrics status`.
+   For a nontechnical user, lead with the README's single copyable prompt and
+   canonical JCR/CAS table layouts; expose mappings only when header detection
+   fails.
    Import an authorized local CSV edition when available and select its year.
    If the user has an XLSX export, convert the relevant sheet to CSV locally
-   before import. For a reusable layout, keep those files under
+   before import; if the host cannot read or convert it, give exact Save As CSV
+   instructions and do not claim it was imported. For a reusable layout, keep
+   those files under
    `WORKSPACE/local-metrics/`, but do not assume placement imports them: run
    `metrics import` explicitly. Do not search for, download, or fabricate a
    licensed table on the user's behalf. If no authorized edition is available,
