@@ -677,6 +677,14 @@ class StateTest(unittest.TestCase):
         self.assertEqual([row["impact_factor"] for row in a_rows], [9.1])
         self.assertEqual({row["impact_factor"] for row in current if row["category"] in {"A", "B"}}, {9.1})
 
+    def test_compact_metrics_names_provider_and_edition(self):
+        label = lw.compact_metrics(work(journal_metrics={
+            "openalex": {"2yr_mean_citedness": 3.2},
+            "jcr": [{"metric_year": 2025, "quartile": "Q1", "impact_factor": 8.2}],
+            "cas": [{"metric_year": 2025, "scope": "major", "zone": "1"}],
+        }))
+        self.assertEqual(label, "OpenAlex 2y mean citedness 3.2; JCR 2025 Q1, JIF 8.2; CAS 2025 major 1")
+
     def test_metric_import_accepts_original_wide_layouts(self):
         source = self.root / "wide-jcr.csv"
         source.write_text(

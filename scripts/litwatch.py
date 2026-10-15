@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-VERSION = "2.3.3"
+VERSION = "2.3.4"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
 MAX_TEXT_SEED_BYTES = 20 * 1024 * 1024
@@ -2675,14 +2675,15 @@ def compact_metrics(work: dict[str, Any]) -> str:
     jcr = metrics.get("jcr") or []
     quartiles = sorted({row.get("quartile") for row in jcr if row.get("quartile")})
     impact_factors = sorted({row.get("impact_factor") for row in jcr if row.get("impact_factor") is not None})
-    if quartiles:
-        values.append("JCR " + "/".join(quartiles))
-    if impact_factors:
-        values.append("JIF " + "/".join(str(v) for v in impact_factors))
+    jcr_years = sorted({str(row["metric_year"]) for row in jcr if row.get("metric_year") is not None})
+    jcr_parts = (["/".join(quartiles)] if quartiles else []) + (["JIF " + "/".join(str(v) for v in impact_factors)] if impact_factors else [])
+    if jcr_parts:
+        values.append("JCR" + (" " + "/".join(jcr_years) if jcr_years else "") + " " + ", ".join(jcr_parts))
     cas = metrics.get("cas") or []
     zones = sorted({f"{row.get('scope')} {row.get('zone')}" for row in cas if row.get("zone")})
+    cas_years = sorted({str(row["metric_year"]) for row in cas if row.get("metric_year") is not None})
     if zones:
-        values.append("CAS " + "/".join(zones))
+        values.append("CAS" + (" " + "/".join(cas_years) if cas_years else "") + " " + "/".join(zones))
     return "; ".join(values) if values else "metrics unavailable"
 
 

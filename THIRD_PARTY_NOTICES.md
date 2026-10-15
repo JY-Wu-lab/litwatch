@@ -12,6 +12,12 @@ included. The local importer stores normalized rows in the user's workspace
 only; it does not grant a license to obtain, copy, publish, or redistribute the
 source data.
 
+The original publishers are Clarivate for Journal Citation Reports and the
+Chinese Academy of Sciences National Science Library for its historical Journal
+Partition Table. The latter announced that it stopped updating and publishing
+the table from 2026; 2025 is the final official historical CAS edition:
+https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html
+
 Clarivate's published JCR usage guidance states that wholesale sharing outside
 a subscriber's institution is prohibited and that some publication uses require
 permission:

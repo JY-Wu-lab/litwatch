@@ -25,10 +25,10 @@ monitoring, preprint tracking, JCR quartile, CAS partition.
    automatically, ask it to read the root `SKILL.md` first.
 3. Attach or identify two to five papers that truly match your topic. PDF, DOI,
    PMID, title, RIS, and BibTeX all work. **A journal name is not a seed paper.**
-4. Choose an empty folder for saved searches, for example
-   `D:\research\my-watch`, and give the model this prompt:
+4. Choose a writable folder outside the LitWatch code directory. Replace
+   `<YOUR_WORKSPACE>` below with its actual path, then give the model this prompt:
 
-       Use LitWatch with D:\research\my-watch as the working folder. Treat my
+       Use LitWatch with <YOUR_WORKSPACE> as the working folder. Treat my
        attached papers as relevant examples. Preview the search without saving
        it, and explain why each candidate was selected, needs review, or was
        excluded. After I confirm, save the search and deeply explain at most
@@ -58,7 +58,7 @@ want to filter by journal quartile, CAS zone, or impact factor.
 | Required? | Input | Example |
 |---|---|---|
 | Yes | A few papers that truly match your topic | PDF, DOI, PMID, title, RIS, or BibTeX |
-| Yes | A working folder for saved history | `D:\research\my-watch` |
+| Yes | A working folder for saved history | Any writable folder you choose outside the LitWatch code directory |
 | Optional | Look-alike papers that you do not want | Helps reduce similar false positives |
 | Optional | Year, access, or document-type rules | “Since 2022” or “exclude reviews” |
 | Optional | An authorized JCR or CAS CSV | Only for quartile, zone, or JIF filtering |
@@ -232,7 +232,9 @@ as JCR Q1, CAS zone 1–2, or a JIF threshold belong to metric filters.
 For a one-off run, the simplest option is to attach the files to the model or
 paste the identifiers in the prompt. For repeated runs, keep inputs in the
 runtime workspace. The folder names below are a recommended convention, not an
-auto-discovery mechanism:
+auto-discovery mechanism. Here and below, `WORKSPACE` means **the working folder
+you selected**; it does not mean that the folder must literally be named
+`WORKSPACE`:
 
     WORKSPACE/
     ├── config.json                 created by `init`
@@ -245,8 +247,8 @@ auto-discovery mechanism:
     │   └── negative/
     │       └── false-positives.ris
     └── local-metrics/              create only for authorized metric files
-        ├── JCR2025-UTF8.csv
-        └── FQBJCR2025-UTF8.csv
+        ├── jcr-authorized.csv      use the filename you actually have
+        └── cas-authorized.csv      use the filename you actually have
 
 LitWatch does **not** scan these folders automatically. Copying a file there has
 no effect until it is explicitly added or imported.
@@ -262,9 +264,9 @@ Minimal seed JSON:
 
 Add the files with the CLI:
 
-    python scripts/litwatch.py seed add --workspace WORKSPACE WORKSPACE/inputs/positive/seeds.json WORKSPACE/inputs/positive/references.ris
-    python scripts/litwatch.py seed add --workspace WORKSPACE --negative WORKSPACE/inputs/negative/false-positives.ris
-    python scripts/litwatch.py seed list --workspace WORKSPACE
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" "WORKSPACE/inputs/positive/seeds.json" "WORKSPACE/inputs/positive/references.ris"
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" --negative "WORKSPACE/inputs/negative/false-positives.ris"
+    python scripts/litwatch.py seed list --workspace "WORKSPACE"
 
 Or tell the model:
 
@@ -279,9 +281,9 @@ Metric files are separate from seeds. Merely placing a CSV under
 `WORKSPACE/local-metrics/` does not enable it. Tell the model exactly which file,
 provider, and edition to import:
 
-    Use $litwatch with WORKSPACE. Import
-    WORKSPACE/local-metrics/JCR2025-UTF8.csv as provider `jcr`, year 2025, and
-    WORKSPACE/local-metrics/FQBJCR2025-UTF8.csv as provider `cas`, year 2025.
+    Use $litwatch with <YOUR_WORKSPACE>. Import <JCR CSV PATH> as provider
+    `jcr` with <JCR EDITION YEAR>, and <CAS CSV PATH> as provider `cas` with
+    <CAS EDITION YEAR>.
     Run `metrics status` and tell me how many journals were imported. Then use
     JCR Q1/Q2 and CAS major-zone 1/2 filters. Mark missing or conflicting data
     as “needs review” unless I explicitly request exclusion.
@@ -295,7 +297,7 @@ you want discovery, monitoring, or deep reading.
 
 ### First search plus deep reading
 
-    Use $litwatch. Create a persistent workspace at D:\research\my-watch.
+    Use $litwatch. Create a persistent workspace at <YOUR_WORKSPACE>.
     Use these as positive seed papers: <DOI, PMID, title, or attached file>.
     Find directly relevant papers published since 2022. Prefer topic relevance
     over citation count and do not apply a JCR/CAS hard filter. Summarize the
@@ -306,15 +308,36 @@ you want discovery, monitoring, or deep reading.
 
 ### Search with journal filters
 
-    Use $litwatch with D:\research\my-watch. Import my authorized JCR/CAS CSV
-    at <path>, then find related papers that meet <JCR Q1/Q2, CAS 1/2, or JIF
-    threshold>. Keep missing or conflicting metrics pending rather than guessing.
-    Return the filter reasons and deeply interpret no more than three papers that
-    also pass the full-text evidence gate.
+Replace the path, year, and filter below, then copy this prompt to the model:
+
+    Use $litwatch with <YOUR_WORKSPACE>. First inspect the provenance notes,
+    filename, fields, and edition year of <CSV path>. Do not treat the
+    `--provider` option alone as proof that a file is an official export.
+
+    For JCR data, name Clarivate Journal Citation Reports as the source and
+    retain the edition year. Report “JCR <year> <category> <Q1-Q4>” and attach
+    the year to JIF. For CAS data, name the Chinese Academy of Sciences National
+    Science Library Journal Partition Table and retain major/minor scope. The
+    2025 edition is the final official historical CAS edition; do not call a
+    post-2025 third-party ranking an official CAS partition. If provenance
+    cannot be verified, say “user-supplied JCR/CAS-format data; official source
+    not verified” rather than endorsing it.
+
+    Import the data, run `metrics status`, and report its edition and journal
+    coverage. Then find related papers meeting <JCR Q1/Q2, CAS major-zone 1/2,
+    or JIF threshold>. For every paper show the metric source, edition year,
+    JCR category or CAS major/minor scope, and whether best or worst aggregation
+    was used. Never label OpenAlex 2-year mean citedness as JIF or a partition.
+    Keep missing or conflicting metrics as needs review. Deeply interpret no
+    more than three papers that also pass the full-text evidence gate.
+
+A prompt can require the model to inspect available evidence, but it cannot
+prove a CSV's license or authenticity from nothing. Formal decisions should use
+valid records from Clarivate, the former CAS publisher, or the user's institution.
 
 ### Continue an existing watch
 
-    Use $litwatch with the existing workspace D:\research\my-watch. Run the
+    Use $litwatch with the existing workspace <YOUR_WORKSPACE>. Run the
     incremental watch from its saved checkpoint. Report only new papers and
     meaningful publication-status events, then interpret up to three newly
     eligible papers in this conversation.
@@ -332,41 +355,41 @@ Use the same Python interpreter for every command.
 Run these commands from the installed `litwatch` directory, or replace
 `scripts/litwatch.py` with its absolute path.
 
+`"WORKSPACE"` below is a path placeholder, not a required folder name. Replace
+every `WORKSPACE` occurrence with any writable folder you choose outside the LitWatch code
+directory, and keep the quotes so paths containing spaces work correctly.
+
 1. Initialize a runtime workspace:
 
-       python scripts/litwatch.py init --workspace D:\research\my-watch
-
-   macOS/Linux example:
-
-       python3 scripts/litwatch.py init --workspace ~/research/my-watch
+       python scripts/litwatch.py init --workspace "WORKSPACE"
 
 2. Add two or more positive seeds:
 
    The identifiers below are non-resolving placeholders. Replace them with real
    DOI/PMID/arXiv/OpenAlex identifiers or local reference files before running.
 
-       python scripts/litwatch.py seed add --workspace D:\research\my-watch 10.1038/example.1 10.1016/example.2
+       python scripts/litwatch.py seed add --workspace "WORKSPACE" 10.1038/example.1 10.1016/example.2
 
    Inputs accumulate. Add a false-positive example:
 
-       python scripts/litwatch.py seed add --workspace D:\research\my-watch --negative unrelated.ris
+       python scripts/litwatch.py seed add --workspace "WORKSPACE" --negative unrelated.ris
 
 3. Inspect the profile:
 
-       python scripts/litwatch.py seed list --workspace D:\research\my-watch
+       python scripts/litwatch.py seed list --workspace "WORKSPACE"
 
 4. Preview a baseline without changing state or reports:
 
-       python scripts/litwatch.py discover --workspace D:\research\my-watch --dry-run --explain
+       python scripts/litwatch.py discover --workspace "WORKSPACE" --dry-run --explain
 
 5. Save the baseline, then run incremental watches:
 
-       python scripts/litwatch.py discover --workspace D:\research\my-watch
-       python scripts/litwatch.py watch --workspace D:\research\my-watch
+       python scripts/litwatch.py discover --workspace "WORKSPACE"
+       python scripts/litwatch.py watch --workspace "WORKSPACE"
 
 6. Check the environment and APIs:
 
-       python scripts/litwatch.py doctor --workspace D:\research\my-watch --network
+       python scripts/litwatch.py doctor --workspace "WORKSPACE" --network
 
 7. Optionally hand the saved result to an AI model (this is not a CLI command):
 
@@ -437,7 +460,7 @@ Minimal local example:
 
 Import private or deliberately local-only metadata with:
 
-    python scripts/litwatch.py seed add --workspace WORKSPACE --offline seeds.json
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" --offline seeds.json
 
 By default, seed add appends. --replace replaces only positive seeds, or only
 negative seeds when --negative is also present. It never deletes the opposite
@@ -445,7 +468,7 @@ polarity.
 
 The optional pathology example changes only search hints:
 
-    python scripts/litwatch.py init --workspace WORKSPACE --preset pathology-molecular
+    python scripts/litwatch.py init --workspace "WORKSPACE" --preset pathology-molecular
 
 It contains no paper full text, JCR/CAS data, or hidden domain gate. Your seeds
 remain authoritative.
@@ -571,14 +594,39 @@ By default LitWatch displays journal metrics but does not remove a paper because
 its journal ranks lower. A journal-wide metric is not the quality of one paper.
 Metrics exclude papers only when you explicitly enable a required condition.
 
+### Where the partitions and metrics come from
+
+| LitWatch label | Original publisher and source | Meaning | How LitWatch gets it |
+|---|---|---|---|
+| `JCR <year> Q1–Q4`, `JIF` | [Clarivate Journal Citation Reports](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/) | A journal's JIF rank quartile within a JCR category, plus the edition's JIF; one journal may have different quartiles in different categories | The user imports an authorized JCR CSV and declares its edition year |
+| `CAS <year> major/minor 1–4` | [Chinese Academy of Sciences National Science Library Journal Partition Table](https://www.fenqubiao.com/) | A historical major/minor category system distinct from JCR Q1–Q4 | The user imports an authorized historical table and declares its edition year |
+| `OpenAlex 2-year mean citedness` | [OpenAlex Sources data](https://help.openalex.org/data/sources/attributes/) | A public two-year citation statistic; **not a partition and not Clarivate JIF** | Read automatically during online discovery; no local table is needed |
+
+Clarivate assigns JCR quartiles within subject categories, so “JCR Q1” always
+belongs to an edition and category rather than being a permanent property of a
+journal. CAS partitions are a separate system and cannot be converted to or
+from JCR Q1–Q4.
+
+The Chinese Academy of Sciences National Science Library has
+[announced](https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html)
+that it stopped updating and publishing the partition table from 2026. **The
+2025 edition is therefore the final official historical CAS edition.** A later
+ranking published by another organization must name that publisher and must not
+be presented as an official CAS partition.
+
+LitWatch reports labels such as `JCR 2025 Q1` and `CAS 2025 major 1`. Note that
+`--provider jcr` or `--provider cas` selects a parser layout; it does not prove
+that a user-supplied file is an official export. When provenance cannot be
+verified, describe it as user-supplied JCR/CAS-format data.
+
 OpenAlex supplies a public source statistic called 2-year mean citedness.
 LitWatch labels it exactly that; it is not Journal Impact Factor.
 
 JCR and CAS partitions are supported only through local, authorized CSV import:
 
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider jcr --file licensed-jcr.csv --year 2025
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider cas --file licensed-cas.csv --year 2025
-    python scripts/litwatch.py metrics status --workspace WORKSPACE
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "YOUR-JCR-FILE.csv" --year 2025
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "YOUR-CAS-FILE.csv" --year 2025
+    python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
 `--year` is required and names the metric edition, not the papers' publication
 year. The importer accepts long form (one journal/category combination per row)
@@ -594,19 +642,23 @@ the Git repository, then import them once:
 
     WORKSPACE/
     └── local-metrics/
-        ├── JCR2025-UTF8.csv
-        └── FQBJCR2025-UTF8.csv
+        ├── YOUR-JCR-FILE.csv
+        └── YOUR-CAS-FILE.csv
 
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider jcr --file WORKSPACE/local-metrics/JCR2025-UTF8.csv --year 2025
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider cas --file WORKSPACE/local-metrics/FQBJCR2025-UTF8.csv --year 2025
-    python scripts/litwatch.py metrics status --workspace WORKSPACE
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "WORKSPACE/local-metrics/YOUR-JCR-FILE.csv" --year 2025
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "WORKSPACE/local-metrics/YOUR-CAS-FILE.csv" --year 2025
+    python scripts/litwatch.py metrics status --workspace "WORKSPACE"
+
+The filenames and JCR year above are examples; replace them with the actual
+file and edition. The final official historical CAS edition is 2025, so do not
+enter a nonexistent official 2026 CAS edition.
 
 Or tell a tool-capable model:
 
-    Use $litwatch with WORKSPACE. Import my locally authorized JCR and CAS CSV
-    files from WORKSPACE/local-metrics for edition 2025, verify them with
-    `metrics status`, and only then apply my requested quartile/JIF/zone filters.
-    Do not infer missing partitions.
+    Use $litwatch with <YOUR_WORKSPACE>. Import <JCR CSV path and edition year>
+    and <CAS CSV path and edition year>, verify them with `metrics status`, and
+    only then apply my requested quartile/JIF/zone filters. Do not infer missing
+    partitions.
 
 ### Why the partition tables are not in this repository
 
@@ -724,13 +776,15 @@ rejection; the oldest checked OpenAlex records rotate first.
 
 LitWatch does not install schedules or send notifications. After a successful
 manual baseline, call the watch command from the scheduler already trusted by
-the user. Example cron entry:
+the user. In this example cron entry, replace all three paths with real paths
+on that machine:
 
     15 8 * * * cd /path/to/litwatch && /absolute/python scripts/litwatch.py watch --workspace /path/to/workspace
 
 For Windows Task Scheduler, configure the chosen Python executable as the
-program, scripts\litwatch.py watch --workspace D:\path\to\workspace as
-arguments, and the LitWatch directory as the working directory.
+program, use `scripts\litwatch.py watch --workspace "WORKSPACE"` as the
+arguments after replacing `WORKSPACE` with the real path, and use the LitWatch
+directory as the working directory.
 
 Do not pass a fixed --since on routine scheduled runs; checkpoint plus overlap
 handles missed days. Treat exit code 3 as a coverage warning, not “nothing new”.

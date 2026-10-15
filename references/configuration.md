@@ -108,6 +108,18 @@ When hard_filter is true, every configured criterion is combined with AND:
 - CAS zones: choose major or minor scope and best/worst aggregation.
   year has the same exact-edition/null-latest behavior.
 
+Every displayed metric must retain its source and edition. Use `JCR <year>` for
+Clarivate JIF quartiles/JIF, `CAS <year>` plus major/minor scope for historical
+Chinese Academy of Sciences National Science Library zones, and the exact name
+`OpenAlex 2-year mean citedness` for the public OpenAlex statistic. The CAS
+publisher announced that it stopped updating and publishing the table from
+2026, making 2025 the final official historical edition:
+https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html
+
+The import `provider` is a user-declared schema choice, not an authenticity
+check. When a file's provenance has not been verified, call it user-supplied
+JCR/CAS-format data rather than an official export.
+
 Missing can be pending (default), include, or exclude_strict. Journal metrics
 are not applicable to preprints: those checks are marked not_applicable and do
 not reject a preprint even under exclude_strict. Use include_preprints or

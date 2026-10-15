@@ -3,7 +3,7 @@ name: litwatch
 description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: MIT
 metadata:
-  version: "2.3.3"
+  version: "2.3.4"
   schema-version: "1"
 ---
 
@@ -55,7 +55,12 @@ with its absolute path.
    assume placement imports them: run `metrics import` explicitly. For a
    strict venue rule, use `hard_filter=true` and `missing=exclude_strict`; if
    the requested edition is absent, report that gap instead of guessing a
-   partition. Multiple active metric criteria combine with AND.
+   partition. Multiple active metric criteria combine with AND. Whenever a
+   metric is shown, name its provider and edition: `JCR <year>` for JIF
+   quartiles/JIF, `CAS <year>` plus major/minor scope for historical CAS zones,
+   or the exact label `OpenAlex 2-year mean citedness`. The `--provider` value
+   selects an import format; it does not prove that a user-supplied file is an
+   official export. If provenance is not verified, say so.
 
 5. For later runs use `watch`. `reports/`, `latest.json`, `latest.md`, and
    `library.csv` exist only after the first saved (non-dry-run) `discover` or
@@ -99,6 +104,10 @@ with its absolute path.
 - JCR/CAS/JIF data are local, optional, and license-sensitive. Never call
   OpenAlex two-year mean citedness “JIF” or infer individual-paper quality from
   a journal metric.
+- The Chinese Academy of Sciences National Science Library announced that it
+  stopped updating and publishing its partition table from 2026. Treat 2025 as
+  the last official historical CAS edition; label later third-party systems by
+  their actual publisher rather than as official CAS partitions.
 - Do not silently exclude missing metrics. Default behavior annotates only;
   hard filters are opt-in and missing values follow the workspace policy.
 

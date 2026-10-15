@@ -22,10 +22,10 @@
    根目录中的 `SKILL.md`。
 3. 上传或提供 2–5 篇真正相关的论文。可以给 PDF，也可以只给 DOI、PMID、标题或
    RIS/BibTeX 文件。**期刊名称不是种子论文。**
-4. 指定一个用于保存检索记录的空目录，例如 `D:\research\my-watch`，然后直接复制
-   下面这段话给模型：
+4. 在自己的电脑上选择一个有写入权限、并且位于 LitWatch 程序目录之外的文件夹。
+   将下面的 `<你的工作目录>` 替换成它的实际路径，再把整段话交给模型：
 
-       使用 LitWatch，把 D:\research\my-watch 作为工作目录。将我上传的论文作为
+       使用 LitWatch，把 <你的工作目录> 作为工作目录。将我上传的论文作为
        相关样本，先预览检索结果，不要保存。说明每篇候选为什么入选、待核实或排除。
        我确认后再正式保存结果，并在当前对话中详细解读最多 3 篇真正相关且能够读取
        全文的论文。给出投稿/收稿、修回、接受和出版日期及其来源，并附直达链接；
@@ -53,7 +53,7 @@
 | 必需程度 | 内容 | 例子 |
 |---|---|---|
 | 必需 | 几篇真正相关的论文 | PDF、DOI、PMID、标题、RIS 或 BibTeX |
-| 必需 | 一个保存记录的工作目录 | `D:\research\my-watch` |
+| 必需 | 一个保存记录的工作目录 | 你自己选择的、可写且位于 LitWatch 程序目录之外的文件夹 |
 | 可选 | 明确不相关、但容易被误找出来的论文 | 用来减少同类误报 |
 | 可选 | 年份、开放获取、论文类型等要求 | “只要 2022 年以后”“排除综述” |
 | 可选 | 你有权使用的 JCR 或中科院分区 CSV | 只在需要按分区或 JIF 筛选时使用 |
@@ -211,7 +211,8 @@ TXT、BibTeX、RIS 或 JSON。反例种子是已知误报，用来告诉排序�
 
 一次性使用时，最方便的是直接把文件作为附件交给模型，或在提示词中粘贴标识符。
 需要反复监测时，建议把输入放到运行 workspace。以下目录名只是推荐约定，不会被自动
-扫描：
+扫描。这里和下文的 `WORKSPACE` 都代表**你自己选择的工作目录**，不是要求创建一个
+名为 `WORKSPACE` 的文件夹：
 
     WORKSPACE/
     ├── config.json                 `init` 自动创建
@@ -224,8 +225,8 @@ TXT、BibTeX、RIS 或 JSON。反例种子是已知误报，用来告诉排序�
     │   └── negative/
     │       └── false-positives.ris
     └── local-metrics/              仅存放有权使用的指标文件
-        ├── JCR2025-UTF8.csv
-        └── FQBJCR2025-UTF8.csv
+        ├── jcr-authorized.csv      使用你实际拥有的文件名
+        └── cas-authorized.csv      使用你实际拥有的文件名
 
 LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生效，必须显式添加或导入。
 
@@ -240,9 +241,9 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 
 使用命令行添加：
 
-    python scripts/litwatch.py seed add --workspace WORKSPACE WORKSPACE/inputs/positive/seeds.json WORKSPACE/inputs/positive/references.ris
-    python scripts/litwatch.py seed add --workspace WORKSPACE --negative WORKSPACE/inputs/negative/false-positives.ris
-    python scripts/litwatch.py seed list --workspace WORKSPACE
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" "WORKSPACE/inputs/positive/seeds.json" "WORKSPACE/inputs/positive/references.ris"
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" --negative "WORKSPACE/inputs/negative/false-positives.ris"
+    python scripts/litwatch.py seed list --workspace "WORKSPACE"
 
 或者直接告诉大模型：
 
@@ -255,9 +256,8 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 分区表与种子文件相互独立。仅把 CSV 放进 `WORKSPACE/local-metrics/` 不会自动启用，
 必须告诉模型文件、提供方和版本年份：
 
-    使用 $litwatch 和 WORKSPACE。把
-    WORKSPACE/local-metrics/JCR2025-UTF8.csv 按 `jcr`、2025 年导入，把
-    WORKSPACE/local-metrics/FQBJCR2025-UTF8.csv 按 `cas`、2025 年导入。运行
+    使用 $litwatch 和 <你的工作目录>。把 <JCR CSV 路径> 按 `jcr`、<JCR 版本年份>
+    导入，把 <中科院分区 CSV 路径> 按 `cas`、<分区表版本年份> 导入。运行
     `metrics status` 并告诉我成功导入了多少期刊，然后设置 JCR Q1/Q2 与中科院大类
     1/2 区筛选；分区缺失或互相冲突的论文先列为“待核实”，除非我明确要求直接排除。
 
@@ -269,7 +269,7 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 
 ### 首次检索并精读
 
-    使用 $litwatch，在 D:\research\my-watch 创建用于保存记录的工作目录。
+    使用 $litwatch，在 <你的工作目录> 创建用于保存记录的 workspace。
     把这些论文作为相关样本：<DOI、PMID、标题或附件>。查找 2022 年以来直接相关
     的论文，主题相关性优先于引用数，暂不要求必须满足 JCR/CAS 条件。分别汇总入选、
     待核实和排除的结果，然后直接在当前对话中详细解读最多 3 篇合格论文；宁缺
@@ -278,14 +278,30 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 
 ### 带期刊分区或影响因子筛选
 
-    使用 $litwatch 和 D:\research\my-watch。先导入我有权使用的 JCR/CAS CSV：
-    <文件路径>，再查找满足 <JCR Q1/Q2、中科院 1/2 区或指定 JIF 门槛> 的相关
-    论文。指标缺失或冲突的论文保留为“待核实”，不能猜测。说明每篇论文的筛选
-    原因，并只对同时通过全文证据门槛的最多 3 篇论文做详细解读。
+把下面的路径、年份和筛选条件替换成自己的内容后，可直接复制给大模型：
+
+    使用 $litwatch 和 <你的工作目录>。先检查 <CSV 文件路径> 的来源说明、
+    文件名、字段和版本年份，不要仅凭 `--provider` 参数认定它是官方数据。
+
+    如果是 JCR 数据，来源应写为 Clarivate Journal Citation Reports，并记录版本
+    年份；结果必须显示“JCR <年份> <学科> <Q1-Q4>”，JIF 也要带年份。
+    如果是中科院分区，来源应写为中国科学院文献情报中心期刊分区表，并记录大类或
+    小类；2025 是最后一版官方历史数据，不得把 2026 年及以后的第三方榜单称为
+    “官方中科院分区”。如果文件来源无法核实，明确写“用户提供的 JCR/CAS 格式
+    数据，官方来源未核实”，不要替我背书。
+
+    确认后导入数据，运行 `metrics status` 告诉我版本和覆盖的期刊数量，再查找满足
+    <JCR Q1/Q2、中科院大类 1/2 区或指定 JIF 门槛> 的相关论文。逐篇列出分区来源、
+    版本年份、JCR 学科或中科院大/小类，以及采用最好还是最差分区。不要把 OpenAlex
+    2-year mean citedness 写成 JIF 或分区。指标缺失或冲突的论文保留为“待核实”，
+    不能猜测。只对同时通过全文证据门槛的最多 3 篇论文做详细解读。
+
+提示词只能要求模型核验已有证据，不能凭空证明 CSV 的授权或真实性；如果你需要正式
+认定，应以 Clarivate、原中科院文献情报中心或所在机构的有效记录为准。
 
 ### 继续已有监测
 
-    使用 $litwatch 和已有工作目录 D:\research\my-watch，从上次成功检索的位置继续。
+    使用 $litwatch 和已有工作目录 <你的工作目录>，从上次成功检索的位置继续。
     只报告新增论文，以及见刊、更正或撤稿等重要变化，然后在当前对话中解读最多
     3 篇新近符合条件的论文。
 
@@ -300,41 +316,41 @@ A 和 B”“修改年份/OA 条件后做一次 dry-run 预览”。详细解读
 请从已安装的 `litwatch` 目录运行以下命令；如果当前目录不同，请将
 `scripts/litwatch.py` 换成脚本的绝对路径。
 
+以下命令中的 `"WORKSPACE"` 是路径占位符，不是规定的文件夹名称。运行前请把命令中
+所有 `WORKSPACE` 都替换成你自己选择的工作目录，并保留双引号；这样路径中有空格也能使用。
+工作目录可以位于任意盘符或用户目录，但必须可写，并且不能放在 LitWatch 程序目录内。
+
 1. 初始化独立运行目录：
 
-       python scripts/litwatch.py init --workspace D:\research\my-watch
-
-   macOS/Linux 示例：
-
-       python3 scripts/litwatch.py init --workspace ~/research/my-watch
+       python scripts/litwatch.py init --workspace "WORKSPACE"
 
 2. 添加两篇或更多正例：
 
    下列标识符是无法解析的占位符。运行前请换成真实 DOI、PMID、arXiv/OpenAlex
    标识符或本地参考文献文件。
 
-       python scripts/litwatch.py seed add --workspace D:\research\my-watch 10.1038/example.1 10.1016/example.2
+       python scripts/litwatch.py seed add --workspace "WORKSPACE" 10.1038/example.1 10.1016/example.2
 
    默认累积添加。再加入一篇典型误报作为反例：
 
-       python scripts/litwatch.py seed add --workspace D:\research\my-watch --negative unrelated.ris
+       python scripts/litwatch.py seed add --workspace "WORKSPACE" --negative unrelated.ris
 
 3. 查看种子：
 
-       python scripts/litwatch.py seed list --workspace D:\research\my-watch
+       python scripts/litwatch.py seed list --workspace "WORKSPACE"
 
 4. 先预览基线，不改变状态或报告：
 
-       python scripts/litwatch.py discover --workspace D:\research\my-watch --dry-run --explain
+       python scripts/litwatch.py discover --workspace "WORKSPACE" --dry-run --explain
 
 5. 保存基线，之后运行增量监测：
 
-       python scripts/litwatch.py discover --workspace D:\research\my-watch
-       python scripts/litwatch.py watch --workspace D:\research\my-watch
+       python scripts/litwatch.py discover --workspace "WORKSPACE"
+       python scripts/litwatch.py watch --workspace "WORKSPACE"
 
 6. 检查环境和 API：
 
-       python scripts/litwatch.py doctor --workspace D:\research\my-watch --network
+       python scripts/litwatch.py doctor --workspace "WORKSPACE" --network
 
 7. 可选：把保存的结果交给大模型解读（这一步不是 CLI 命令）：
 
@@ -395,14 +411,14 @@ JSON 顶层可以是一个对象，或由对象组成的非空数组。每个对
 
 私密或明确只在本地使用的元数据应这样导入：
 
-    python scripts/litwatch.py seed add --workspace WORKSPACE --offline seeds.json
+    python scripts/litwatch.py seed add --workspace "WORKSPACE" --offline seeds.json
 
 seed add 默认追加。--replace 只替换正例；若同时使用 --negative，则只替换反例，绝不
 删除另一类种子。
 
 病理示例仅增加查询提示：
 
-    python scripts/litwatch.py init --workspace WORKSPACE --preset pathology-molecular
+    python scripts/litwatch.py init --workspace "WORKSPACE" --preset pathology-molecular
 
 它不含论文全文、JCR/CAS 表或隐藏门槛；种子仍是主题的真实来源。
 
@@ -507,13 +523,33 @@ OA 落地页、供应商明确标注的 PDF、PubMed、arXiv 和 OpenAlex 链接
 这样可以避免把“期刊整体指标”误当成“这篇论文的质量”。只有你明确开启必须满足的
 条件后，分区或影响因子才参与排除。
 
+### 分区和指标来自哪里
+
+| LitWatch 中的名称 | 原始发布方与来源 | 表示什么 | LitWatch 如何取得 |
+|---|---|---|---|
+| `JCR <年份> Q1–Q4`、`JIF` | [Clarivate Journal Citation Reports](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/) | 期刊在 JCR 某一学科中的 JIF 排名分区，以及该版 JIF；同一期刊可能在不同学科有不同分区 | 用户导入有权使用的 JCR CSV，并声明版本年份 |
+| `CAS <年份> major/minor 1–4` | [中国科学院文献情报中心期刊分区表](https://www.fenqubiao.com/) | 独立于 JCR Q1–Q4 的历史分区体系，分大类和小类 | 用户导入有权使用的历史分区表，并声明版本年份 |
+| `OpenAlex 2-year mean citedness` | [OpenAlex Sources 数据](https://help.openalex.org/data/sources/attributes/) | 公开的期刊两年平均被引指标；**不是分区，也不是 Clarivate JIF** | 联网检索时自动读取，无需本地表 |
+
+JCR 分区由 Clarivate 按期刊在每个学科类别中的排名给出，所以“JCR Q1”必须同时理解为
+某一版本、某一学科下的结果，不能脱离年份和学科永久使用。中科院分区是另一套评价
+体系，不能由 JCR Q1–Q4 换算得到，也不能反向换算。
+
+中国科学院文献情报中心已[正式宣布](https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html)
+自 2026 年起不再更新与发布期刊分区表。因此 **2025 是最后一版官方历史中科院分区**；
+2026 年及以后由其它机构发布的榜单必须按其真实发布方标注，不能写成“官方中科院分区”。
+
+LitWatch 报告会显示 `JCR 2025 Q1`、`CAS 2025 major 1` 这样的来源与年份。需要注意：
+`--provider jcr` 或 `--provider cas` 只是告诉导入器按哪种字段格式读取，并不能证明文件
+来自官方。文件来源无法核实时，应写成“用户提供的 JCR/CAS 格式数据”，不能替用户背书。
+
 OpenAlex 提供公开的 2-year mean citedness。LitWatch 始终按原名标注，绝不称为 JIF。
 
 JCR 与中科院分区仅支持用户本地、合法授权的 CSV：
 
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider jcr --file licensed-jcr.csv --year 2025
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider cas --file licensed-cas.csv --year 2025
-    python scripts/litwatch.py metrics status --workspace WORKSPACE
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "你的-JCR-文件.csv" --year 2025
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "你的-中科院分区文件.csv" --year 2025
+    python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
 `--year` 必填，表示指标版本年份，不是论文发表年份。导入器同时接受长表（每行一个
 期刊/学科组合）和常见编号宽表，包括 JCR 的 `Category_1` /
@@ -527,17 +563,20 @@ JCR 与中科院分区仅支持用户本地、合法授权的 CSV：
 
     WORKSPACE/
     └── local-metrics/
-        ├── JCR2025-UTF8.csv
-        └── FQBJCR2025-UTF8.csv
+        ├── 你的-JCR-文件.csv
+        └── 你的-中科院分区文件.csv
 
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider jcr --file WORKSPACE/local-metrics/JCR2025-UTF8.csv --year 2025
-    python scripts/litwatch.py metrics import --workspace WORKSPACE --provider cas --file WORKSPACE/local-metrics/FQBJCR2025-UTF8.csv --year 2025
-    python scripts/litwatch.py metrics status --workspace WORKSPACE
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "WORKSPACE/local-metrics/你的-JCR-文件.csv" --year 2025
+    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "WORKSPACE/local-metrics/你的-中科院分区文件.csv" --year 2025
+    python scripts/litwatch.py metrics status --workspace "WORKSPACE"
+
+上面的文件名和 JCR 年份只是示例，必须换成实际文件名和版本。官方历史中科院分区的
+最后版本是 2025，不能填写一个并不存在的官方 2026 版本。
 
 也可以直接告诉具备工具能力的大模型：
 
-    使用 $litwatch 和 WORKSPACE。导入 WORKSPACE/local-metrics 中我有权使用的
-    2025 版 JCR 与中科院分区 CSV，先运行 `metrics status` 核验，再应用我指定的
+    使用 $litwatch 和 <你的工作目录>。导入 <JCR CSV 路径和版本年份> 与
+    <中科院分区 CSV 路径和版本年份>，先运行 `metrics status` 核验，再应用我指定的
     JCR 分区/JIF/中科院分区条件。缺失分区不能推测。
 
 ### 为什么仓库不附带分区表
@@ -637,13 +676,13 @@ watch 对新论文只报告一次。普通预印本元数据更新静默写入�
 ## 如何定期自动运行
 
 LitWatch 不自动安装计划任务，也不负责发消息。完成一次人工基线后，可让用户已经信任
-的调度器调用 watch。例如 cron：
+的调度器调用 watch。例如 cron；其中三个路径都必须替换成当前机器上的真实路径：
 
     15 8 * * * cd /path/to/litwatch && /absolute/python scripts/litwatch.py watch --workspace /path/to/workspace
 
 Windows 任务计划程序中，把选定的 Python 解释器作为程序；参数设为
-scripts\litwatch.py watch --workspace D:\path\to\workspace；起始目录设为 LitWatch
-目录。
+`scripts\litwatch.py watch --workspace "WORKSPACE"`，并将 `WORKSPACE` 换成实际路径；
+起始目录设为 LitWatch 目录。
 
 常规定时运行不要固定传 --since；checkpoint 与重叠窗口会处理漏跑。退出码 3 表示
 覆盖不完整，不是“今天无新文献”。创建外部持久计划属于另一项操作，必须由用户明确
