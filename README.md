@@ -34,19 +34,19 @@ partition.
 4. Choose a writable folder outside the LitWatch code directory. Replace
    `<YOUR_WORKSPACE>` below with its actual path, then give the model this prompt:
 
-       Use LitWatch with <YOUR_WORKSPACE> as the working folder. Treat my
-       attached papers as relevant examples. Preview the search without saving
-       it, and explain why each candidate was selected, needs review, or was
+       Use LitWatch with <YOUR_WORKSPACE> as the working folder. Initialize it,
+       then treat my attached papers as relevant examples. Preview the search
+       without saving it, and explain why each candidate was selected, needs review, or was
        excluded. After I confirm, save the search and deeply explain at most
        three directly relevant papers whose full text you can read. Include
        sourced submission/receipt, revision, acceptance, and publication dates
        plus direct links. Mark missing facts unavailable; do not guess.
 
-You can search without JCR or CAS data. Import the corresponding authorized CSV
-only when you explicitly need JCR quartiles, JIF, or historical CAS partitions.
-Without a table, do not ask the model to guess or relabel an OpenAlex statistic
-as JIF. See “Using JCR, CAS partitions, and impact factors” for acquisition paths
-and copyable no-table prompts.
+The repository already includes JCR 2025/JIF and historical CAS 2025 snapshots.
+The first `init` verifies and imports them into the workspace, so you do not need
+to find or place a CSV. Run `metrics status` to confirm. Import a separate CSV
+only for another edition or your own table. The bundled ShowJCR snapshot is not
+official certification; verify formal evaluations with the original provider.
 
 For automatic daily tracking, first save one baseline search, then tell the
 model the daily time, timezone, workspace, and whether a clean no-change run
@@ -76,7 +76,7 @@ verification steps.
 | Yes | A working folder for saved history | Any writable folder you choose outside the LitWatch code directory |
 | Optional | Look-alike papers that you do not want | Helps reduce similar false positives |
 | Optional | Year, access, or document-type rules | “Since 2022” or “exclude reviews” |
-| Optional | An authorized JCR or CAS CSV | Only for quartile, zone, or JIF filtering |
+| Optional | Another edition or your own JCR/CAS CSV | The bundled 2025 edition needs no user file |
 
 ### What it does
 
@@ -146,7 +146,7 @@ verification steps.
 - Verified DOI, publisher, PubMed, arXiv, OpenAlex, or open-full-text links.
 - Submission/receipt, revision, acceptance, online, and print dates when a
   source actually provides them.
-- JSON, Markdown, and CSV reports in the working folder for later review.
+- JSON, Markdown, CSV, and cumulative Excel outputs in the working folder.
 
 ### What it does not do
 
@@ -154,7 +154,8 @@ verification steps.
 - It does not bypass paywalls, logins, CAPTCHAs, or download permissions.
 - It does not treat a journal metric as the quality of an individual paper.
 - It does not invent missing metrics, dates, full-text details, or conclusions.
-- It does not auto-import files merely placed in a folder or install a scheduler.
+- It does not auto-import user files merely placed in a folder or install a
+  scheduler. Only the bundled 2025 tables are auto-imported by `init`.
 
 The search program is model-independent, but the model still needs Python,
 network, and filesystem tools. A plain chat model can analyze material you give
@@ -167,6 +168,8 @@ it but cannot run a live literature search.
 - Python 3.11 or later.
 - HTTPS access to enabled sources for live discovery.
 - A writable persistent workspace outside this skill directory.
+- At least 200 MB free for the workspace is recommended. The database is roughly
+  90 MB after the bundled metrics import, before reports and cache grow.
 - Optional: pypdf for local PDF seed extraction.
 - For full-paper interpretation: a host document reader and a user-supplied or
   lawfully accessible copy. Abstract-only interpretation needs no extra package.
@@ -186,7 +189,7 @@ Clone the repository, then verify the CLI:
 
 Alternatively, download the GitHub ZIP and extract it. The selected skill folder
 must be the directory that directly contains `SKILL.md`, `scripts/`, and
-`references/`; do not select its parent directory.
+`references/`, plus `bundled-metrics/`; do not select its parent directory.
 
 ### Repository map
 
@@ -203,6 +206,11 @@ belong here; they go in a separate workspace that you choose:
     │   └── openai.yaml
     ├── scripts/
     │   └── litwatch.py
+    ├── bundled-metrics/
+    │   ├── README.md
+    │   ├── COPYING.GPL-3.0
+    │   ├── JCR2025-UTF8.csv
+    │   └── FQBJCR2025-UTF8.csv
     ├── references/
     │   ├── configuration.md
     │   ├── sources-and-ranking.md
@@ -220,6 +228,7 @@ belong here; they go in a separate workspace that you choose:
 |---|---|
 | `SKILL.md` | Core instructions the model reads first, including discovery, screening, and interpretation boundaries |
 | `scripts/litwatch.py` | The CLI that initializes, imports seeds/metrics, searches, watches, and writes reports |
+| `bundled-metrics/` | Bundled JCR/JIF and historical CAS 2025 snapshots, verified and imported by `init` |
 | `references/` | Detailed task-specific rules for the model; ordinary users need not read all of them first |
 | `agents/openai.yaml` | Optional OpenAI UI metadata; the core is not OpenAI-dependent |
 | `presets/` | Optional example settings; never a substitute for the user's seed papers |
@@ -242,11 +251,13 @@ select this repository root. The resulting layout must be:
     └── litwatch/
         ├── SKILL.md
         ├── scripts/
-        └── references/
+        ├── references/
+        └── bundled-metrics/
 
 Do not copy only `SKILL.md`: discovery needs `scripts/litwatch.py`, and deep
-reading depends on the protocols in `references/`. `agents/openai.yaml` is an
-optional OpenAI UI adapter; core behavior does not depend on it.
+reading depends on `references/`; automatic metric setup needs
+`bundled-metrics/`. `agents/openai.yaml` is an optional OpenAI UI adapter; core
+behavior does not depend on it.
 
 Skill discovery paths and invocation syntax belong to the host and can change.
 Use that host's current documentation. If the host has no native skill loader but
@@ -270,13 +281,13 @@ capabilities are:
 | Related-paper discovery, ranking, deduplication, and reports | Yes | Python 3.11+, network access, writable workspace |
 | Public venue annotation | Yes | OpenAlex 2-year mean citedness; never labeled JIF |
 | Deep reading in chat | Yes, when text is readable | Host document/web reader plus lawful full text |
-| JCR quartile/JIF or CAS partition annotation/filtering | No | Import a locally authorized CSV edition once per workspace |
+| JCR 2025/JIF and historical CAS 2025 annotation/filtering | Yes | The first `init` imports the bundled snapshots |
+| Another metric edition or a custom table | No | Import its CSV with `metrics import` |
 | Automatic daily monitoring | Watch engine ready; wake-up is host-dependent | LitWatch supplies incremental `watch`; a host or OS scheduler triggers it daily |
 
-Therefore a new user can search immediately without JCR/CAS data. A request for
-JCR, JIF, or CAS filtering must not silently substitute OpenAlex metrics or
-invent a partition; import an authorized table or report the metric as
-unavailable.
+Therefore a new user can use the 2025 metrics after a normal `init`. If a user
+requests another edition, do not substitute the 2025 snapshot or an OpenAlex
+metric and do not invent a partition; import that edition or report it missing.
 
 ## Where to put seeds and journal-metric files
 
@@ -312,7 +323,7 @@ you selected**; it does not mean that the folder must literally be named
     │   │   └── example-paper.pdf
     │   └── negative/
     │       └── false-positives.ris
-    └── local-metrics/              create only for authorized metric files
+    └── local-metrics/              optional, only for your other metric files
         ├── jcr-authorized.csv      use the filename you actually have
         └── cas-authorized.csv      use the filename you actually have
 
@@ -343,10 +354,10 @@ Or tell the model:
     `seed list`, show me what was added, then preview the search without saving
     it (a dry run).
 
-Metric files are separate from seeds. Merely placing a CSV under
-`WORKSPACE/local-metrics/` does not enable it. When you need a partition or JIF,
-copy the single model prompt at the start of “Using JCR, CAS partitions, and
-impact factors.” It covers an existing CSV, an Excel export, or no table at all.
+Metric files are separate from seeds. `init` imports the bundled 2025 tables.
+A file that you place under `WORKSPACE/local-metrics/` is not imported until you
+run `metrics import`. For journal filters, copy the model prompt under “Using
+JCR, CAS partitions, and impact factors.”
 
 ## Usage mode 1 — ask an AI agent
 
@@ -368,11 +379,11 @@ you want discovery, automatic daily monitoring, or deep reading.
 
 ### Search with journal filters
 
-You do not need to study field mappings or commands first. Use the single prompt
-under “Simplest method — give this to the model” below. Attach your file if you
-have one; without a table, LitWatch can still search by topic. A model cannot
-prove official provenance from a filename alone, so formal decisions should use
-valid publisher or institutional records.
+You do not need to study field mappings or commands first. For the 2025 edition,
+use the prompt under “Simplest method — give this to the model” without attaching
+a table. Supply your own file only for another edition. The bundled snapshot is
+not official proof, so formal decisions should use valid provider or institutional
+records.
 
 ### Continue an existing watch
 
@@ -437,6 +448,13 @@ directory, and keep the quotes so paths containing spaces work correctly.
 1. Initialize a runtime workspace:
 
        python scripts/litwatch.py init --workspace "WORKSPACE"
+
+   The first run verifies and imports about 150,000 normalized JCR/CAS records,
+   so it may take a little longer than other commands. After `status: imported`,
+   verify it with the command below. Re-running `init` reports
+   `already available` and does not duplicate rows:
+
+       python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
 2. Add two or more positive seeds:
 
@@ -547,20 +565,21 @@ The optional pathology example changes only search hints:
 
     python scripts/litwatch.py init --workspace "WORKSPACE" --preset pathology-molecular
 
-It contains no paper full text, JCR/CAS data, or hidden domain gate. Your seeds
-remain authoritative.
+The preset itself contains no paper, journal list, or hidden gate. Every `init`
+separately loads the two bundled 2025 metric snapshots. Your seeds remain
+authoritative.
 
 ## Reference: command summary
 
 | Command | Purpose |
 |---|---|
-| init | Create config.json and litwatch.db in a separate workspace |
+| init | Create a workspace and verify/import the bundled 2025 journal metrics |
 | seed add | Append/replace positive or negative seed records |
 | seed list | Show safe seed identifiers and titles |
 | discover | Build or rebuild a broad baseline |
 | watch | Report newly discovered works and meaningful lifecycle/status events |
 | metrics import | Import authorized local JCR or CAS CSV rows into SQLite |
-| metrics status | Show imported providers, editions, journal/ISSN coverage, and import time |
+| metrics status | Show source labels, providers, editions, journal/ISSN coverage, and import time |
 | doctor | Validate Python, config, database, optional PDF support, and APIs |
 
 discover and watch accept --since, --until, --dry-run, and --explain. Dates use
@@ -667,43 +686,47 @@ into the new precision-biased defaults.
 
 ## Using JCR, CAS partitions, and impact factors
 
-By default LitWatch displays journal metrics but does not remove a paper because
-its journal ranks lower. A journal-wide metric is not the quality of one paper.
-Metrics exclude papers only when you explicitly enable a required condition.
+The complete repository already contains JCR 2025/JIF and historical CAS 2025
+snapshots. `init` imports them automatically. By default LitWatch displays these
+metrics beside a paper but does not remove a paper because its journal ranks
+lower. Metrics exclude papers only when you explicitly request that rule.
 
 ### Simplest method — give this to the model
 
-Replace the angle-bracketed text; write `unsure` when you do not know the edition
-or rule. Attach a file or add its local path when you have one; the same prompt
-also works without a table:
+Replace the angle-bracketed text:
 
-    Use $litwatch with <YOUR_WORKSPACE>. I want to use <JCR quartiles/JIF/
-    historical CAS partitions>, edition <YEAR>, with this rule: <for example
-    JCR Q1/Q2, JIF at least 5, or CAS major zones 1/2>.
+    Use $litwatch with <YOUR_WORKSPACE>. Run init, then run metrics status and
+    confirm that bundled JCR 2025 and CAS 2025 are loaded. My journal rule is:
+    <for example JCR Q1/Q2, JIF at least 5, or CAS major zones 1/2>. Update
+    config.json for me, but do not save a real search yet.
 
-    If I supplied a file, inspect only its local provenance notes, edition,
-    worksheets, encoding, and headers first. If it is Excel and this environment
-    can read it, convert the needed worksheet locally to CSV UTF-8 and normalize
-    it to the recommended JCR or CAS long-table layout in the README. Otherwise,
-    tell me which worksheet to save with spreadsheet software; do not pretend it
-    was imported. Show the headers and a small preview; do not upload, publish,
-    or overwrite the source. Once it is parseable, import it, run
-    `metrics status`, report the edition, row count, and journal count, then run
-    one dry preview.
+    Run doctor and one dry run. Show selected, unresolved, and excluded papers
+    with reasons. Keep the source, edition, and JCR category or CAS major/minor
+    scope visible. Treat a missing match as unresolved; never guess a partition
+    or call OpenAlex 2-year mean citedness JIF. Wait for my confirmation before
+    the saved run. Deeply read at most three papers; never pad the count.
 
-    If I do not have an authorized table, do not fetch an unverified mirror,
-    guess partitions, or label OpenAlex 2-year mean citedness as JIF. Tell me
-    which official route, edition, categories, and format I should request.
-    Meanwhile disable JCR/CAS/JIF hard filters and search by topic relevance.
+If the same provider and edition already exist, `init` keeps them rather than
+appending duplicates or overwriting them. The bundled files are public ShowJCR
+snapshots, not official certification; check the original provider for formal
+submission or evaluation decisions.
 
-    Preserve source, edition, JCR category or CAS major/minor scope in every
-    result. Keep missing or conflicting values as needs review unless I
-    explicitly request strict exclusion. Deeply interpret at most three papers
-    that both pass the rules and have readable full text; never pad the count.
+### When you need another edition or your own table
 
-This covers an existing CSV, an Excel export, no table, and uncertain
-provenance. A model can inspect evidence but cannot invent proof of a file's
-license or authenticity.
+Attach the CSV/Excel file or provide its local path, then use:
+
+    Use $litwatch with <YOUR_WORKSPACE>. I need <JCR or CAS> edition <YEAR> from
+    <FILE PATH>. Inspect its edition, worksheet, encoding, and headers locally;
+    do not upload or overwrite it. If it is Excel, convert the correct worksheet
+    to CSV UTF-8. Normalize and import it using the README's recommended columns,
+    then run metrics status and report the source, edition, record count, and
+    journal count. Run a dry preview and do not enable strict exclusion until I
+    confirm. If that provider/year already exists, first decide whether my file
+    is a complete table. Use --replace-edition only for a complete replacement,
+    never for a partial export. State uncertainty instead of guessing.
+
+If the requested edition is unavailable, search by topic with that hard filter
+disabled and label the corresponding metric unavailable.
 
 ### Recommended table layouts
 
@@ -735,9 +758,10 @@ Q1–Q4 values in CAS zone columns.
 
 | Needed data | Official route and typical access | If unavailable |
 |---|---|---|
-| JCR quartile / JIF | Use institutional or individual access to [Clarivate JCR](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/), select an edition and categories, then export CSV/Excel | Ask a library or database administrator for the needed edition, categories, and permitted export; do not have a model assemble an unofficial web table |
-| Historical CAS partition | Use authorized institutional or individual access to [fenqubiao.com](https://www.fenqubiao.com/) | Ask a library or research office; 2025 is the final official historical edition, so later third-party lists are not official CAS partitions |
-| Neither | No table is required | Leave hard filters off, search normally, and mark these fields unavailable |
+| Bundled 2025 snapshot | The repository's `bundled-metrics/`, sourced from public [ShowJCR](https://github.com/hitfyd/ShowJCR) | Run `init`; no manual file placement is needed |
+| Official JCR/JIF or another edition | Use institutional or individual access to [Clarivate JCR](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/) | Ask a library or database administrator for the needed edition and categories |
+| Official historical CAS partition | Use authorized institutional or individual access to [fenqubiao.com](https://www.fenqubiao.com/) | Ask a library or research office; 2025 is the final official historical edition |
+| No matching edition | No substitute table is required | Disable that hard filter, search normally, and mark the field unavailable |
 
 Clarivate's [export help](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals)
 states that the web interface exports the first 600 sorted records at a time;
@@ -753,11 +777,11 @@ a different system; neither can be converted into the other. Public
 unverified file may be tested, but label it “user-supplied JCR/CAS-format data;
 official source not verified.”
 
-### Auxiliary method — place and import files yourself
+### Auxiliary method — import your own other edition
 
-A metric file may live anywhere the model and CLI can read. For easier local
-management, keep it under the runtime workspace's `local-metrics/`, never in a
-public Git repository:
+Your own metric file may live anywhere the model and CLI can read. For easier
+local management, keep it under the runtime workspace's `local-metrics/`. This
+folder is separate from the bundled data and should not be published:
 
     WORKSPACE/
     └── local-metrics/
@@ -776,16 +800,20 @@ normalized rows, provider, edition, import time, and SHA-256, so retain the
 original under your own license and backup policy. See
 `references/configuration.md` for unusual headers, wide layouts, and `--mapping`.
 
-### Why the partition tables are not in this repository
+The default import merges with existing rows for that provider/year. Add
+`--replace-edition` only when a complete table should fully replace the bundled
+or older edition. Replacement is atomic, so a failed import keeps the old rows.
+Never use it for a partial category export, because omitted journals are deleted.
 
-An earlier private copy used a mirror layout provided by the
-[ShowJCR project](https://github.com/hitfyd/ShowJCR). A downloadable third-party
-repository is not proof of provenance or redistribution rights for the
-underlying metrics, and a code license does not automatically cover its data.
-JCR access, export, API use, and reuse remain subject to Clarivate's current
-subscription and usage terms; historical CAS data has its own access conditions.
-LitWatch therefore ships a local importer, not either dataset, and never asks the
-model to fetch a mirror automatically.
+### Where the bundled tables come from
+
+The two 2025 CSV files under `bundled-metrics/` come from the public
+[ShowJCR project](https://github.com/hitfyd/ShowJCR). `init` verifies their
+checksums before import and stops with a clear re-download message if either
+file is missing or changed. LitWatch code is MIT licensed; the two CSV files
+retain the upstream repository's GPL-3.0 terms, reproduced alongside them. They
+are convenient third-party snapshots, not certification from Clarivate or the
+CAS platform. Verify formal evaluations with the original provider.
 
 LitWatch emits labels such as `JCR 2025 Q1` and `CAS 2025 major 1`.
 `--provider jcr` and `--provider cas` select parser layouts, not authenticity.
@@ -884,10 +912,11 @@ writes are atomic.
 | `library.csv` | Cumulative latest state of all stored works, including accepted, pending, and rejected |
 | `accepted_papers.xlsx` | Cumulative deduplicated Excel view of works accepted at least once; new acceptances append logically and old rows update |
 
-`init` creates only `config.json` and `litwatch.db`. `inputs/` and
-`local-metrics/` are user-created filing conventions; `reports/` appears only
-after the first non-dry-run `discover` or `watch`. It is therefore normal to see
-no workbook or `latest.*` immediately after initialization.
+`init` creates `config.json` and `litwatch.db` and imports the two bundled 2025
+metric tables into the database; it does not copy their CSV files into the
+workspace. `inputs/` and `local-metrics/` are optional user-created folders.
+`reports/` appears only after the first non-dry-run `discover` or `watch`, so it
+is normal to see no workbook or `latest.*` immediately after initialization.
 
 `library.csv` is the cumulative current-state export of every stored paper,
 including pending and rejected records. `accepted_papers.xlsx` is the easier
@@ -1100,9 +1129,11 @@ persistent schedule requires an explicit user request. See
   not configurable in `config.json`.
 - Do not publish workspaces, uploaded papers, reports containing sensitive
   queries, local metrics, or environment files.
-- No JCR/CAS tables or paper full texts are bundled. A deep-reading request may
-  use a supplied or lawfully public copy, but it does not authorize account
-  login, purchase, paywall/CAPTCHA bypass, bulk download, or redistribution.
+- Two ShowJCR-sourced 2025 journal-metric snapshots are bundled, but no paper
+  full text is included. The snapshots are not official certification. Do not
+  publish a separately imported table or a workspace. Deep reading does not
+  authorize account login, purchase, paywall/CAPTCHA bypass, bulk download, or
+  redistribution.
 
 See THIRD_PARTY_NOTICES.md and references/compatibility-and-security.md.
 
@@ -1124,8 +1155,9 @@ broaden conclusions until the failed source is retried.
 **Too many pending papers** — add abstracts/identifiers to seeds, add one or two
 representative negative seeds, and tune thresholds from a labeled sample.
 
-**JCR/CAS missing** — import a legally obtained local CSV and verify header
-mapping. The public package intentionally contains no proprietary tables.
+**JCR/CAS missing** — rerun `init` and `metrics status`. If a bundled file is
+missing or fails its checksum, download the complete repository again. Import a
+separate CSV only when you need an edition other than 2025.
 
 **Database locked** — another process may be using the workspace. SQLite and a
 run lock prevent concurrent writers. A stale run-lock older than six hours is
@@ -1138,12 +1170,12 @@ Run the standard-library test suite:
     python -m unittest discover -s tests -v
 
 Then validate the Skill metadata with the skill-creator quick validator and run
-a clean temporary-workspace smoke test. Tests use synthetic/recorded fixtures;
-they must not require JCR/CAS data, private papers, or a live API.
+a clean temporary-workspace smoke test. Unit tests use synthetic/recorded
+fixtures; a release smoke test should also verify and import the two bundled
+CSVs without private papers or a live API.
 
-The original personal script, logs, reports, sample full text, and licensed-data
-snapshots are intentionally outside this distributable package in a private
-backup. They are not test fixtures.
+The original personal script, logs, reports, and sample full text remain outside
+this distributable package. They are not test fixtures.
 
 ## Full capability boundaries
 
@@ -1162,8 +1194,10 @@ screening, and documented reproducible queries.
 
 ## License and acknowledgements
 
-LitWatch code is released under the MIT License. The Agent Skills structure and
-some workflow ideas were informed by the public
+LitWatch code is released under the MIT License. The two CSVs under
+`bundled-metrics/` retain the ShowJCR repository's GPL-3.0 terms; see
+`bundled-metrics/README.md` and `THIRD_PARTY_NOTICES.md`. The Agent Skills
+structure and some workflow ideas were informed by the public
 [Gonglitian/agent-skills](https://github.com/Gonglitian/agent-skills) collection,
 but its code, host-specific commands, hidden sibling dependencies, and licensed
 data were not copied. The normative portable entry format follows the

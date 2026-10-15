@@ -16,8 +16,9 @@
         └── accepted_papers.xlsx
 
 The `reports/` directory and all files under it are created only by the first
-saved (non-dry-run) discover or watch. init creates only config/database state;
-a dry run does not create or update report files.
+saved (non-dry-run) discover or watch. init creates config/database state and
+imports the bundled 2025 metric snapshots into SQLite; it does not copy their
+CSV files into the workspace. A dry run does not create or update report files.
 
 Run files are immutable and timestamped, so two runs on one day cannot
 overwrite each other. The latest files are atomically updated copies of the
@@ -90,6 +91,9 @@ On Windows, close the workbook before a run so Excel does not block replacement.
 Each paper record contains stable identifiers, URL, title/authors/abstract,
 publication state, score and components, reasons, relationship_evidence,
 lifecycle events, OA data, journal metrics, and metadata provenance.
+Each local JCR/CAS metric item includes `provider`, `metric_year`, and `source`;
+`source` is `ShowJCR snapshot` for the bundled files and `local import` for a
+user-imported file.
 `publication_history` has submitted, received, revised (an array), accepted,
 published_online, published_print, and posted values. Missing scalar dates are
 null and missing revisions are an empty array. A date can be `YYYY`, `YYYY-MM`,
@@ -135,8 +139,8 @@ dates in the article or publisher record and cite the source.
 - source_state advances the date-search checkpoint only after an attempted,
   successful, untruncated search and also records lifecycle rotation times.
 - runs stores immutable run summaries.
-- journal_metrics stores locally imported authorized rows with metric year and
-  source hash.
+- journal_metrics stores bundled or user-imported normalized rows with metric
+  year and source hash.
 - http_cache stores response bytes under SHA-256 URL keys.
 
 SQLite is the source of truth. JSON, CSV, and XLSX are reports, not state inputs.

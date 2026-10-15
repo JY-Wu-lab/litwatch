@@ -15,10 +15,10 @@ core, not a promise that every chat product can execute Python or schedules.
 
 ## Installation
 
-Install or link the whole litwatch directory where the host discovers skills.
-The directory name and frontmatter name must remain litwatch. The OpenAI
-agents/openai.yaml file is an optional UI adapter; the core has no OpenAI-only
-dependency.
+Install or link the whole litwatch directory where the host discovers skills,
+including `scripts/`, `references/`, and `bundled-metrics/`. The directory name
+and frontmatter name must remain litwatch. The OpenAI agents/openai.yaml file is
+an optional UI adapter; the core has no OpenAI-only dependency.
 
 Python 3.11 or later is required. The core uses the standard library. For PDF
 seeds, install pypdf in the host Python environment. BibTeX, RIS, JSON, TXT,
@@ -71,9 +71,11 @@ before creating or operating a recurring watch.
 ## Publishing and licenses
 
 Before publishing a package, verify it contains no workspace database, reports,
-cache, uploaded papers, logs, environment files, or local metrics. JCR and CAS
-files and their bulk derivatives are not distributable merely because they are
-available from a third-party repository. See THIRD_PARTY_NOTICES.md.
+cache, uploaded papers, logs, environment files, or user-supplied local metrics.
+The two checksummed CSVs under `bundled-metrics/` are intentional third-party
+assets; keep their README, attribution, and upstream terms with any redistributed
+copy. Do not replace or add metric files without recording provenance and a new
+checksum in the code. See THIRD_PARTY_NOTICES.md.
 
 The GitHub repository that inspired some workflow ideas is not copied as a
 runtime dependency. LitWatch uses a single self-contained skill to avoid hidden

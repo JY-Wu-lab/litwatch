@@ -35,9 +35,24 @@ from typing import Any, Iterable
 from xml.sax.saxutils import escape as xml_escape, quoteattr
 
 
-VERSION = "2.3.8"
+VERSION = "2.4.0"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
+BUNDLED_METRICS_DIR = ROOT / "bundled-metrics"
+BUNDLED_METRICS = (
+    {
+        "provider": "jcr",
+        "year": 2025,
+        "filename": "JCR2025-UTF8.csv",
+        "sha256": "e9a0402f505264a796615bcec697f843af08dbce023ce67164c0f6f4709207c4",
+    },
+    {
+        "provider": "cas",
+        "year": 2025,
+        "filename": "FQBJCR2025-UTF8.csv",
+        "sha256": "481224dca2cacc1cce49afb44c968d734c834e498e5ff054f15efb5a548789fc",
+    },
+)
 MAX_TEXT_SEED_BYTES = 20 * 1024 * 1024
 MAX_PDF_SEED_BYTES = 100 * 1024 * 1024
 MAX_METRICS_BYTES = 128 * 1024 * 1024
@@ -1785,6 +1800,11 @@ def open_csv(path: Path, encoding: str | None = None) -> tuple[list[dict[str, st
     raise LitWatchError(f"Cannot decode metrics file {path}: {last_error}")
 
 
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as source_file:
+        return hashlib.file_digest(source_file, "sha256").hexdigest()
+
+
 def import_metrics(
     conn: sqlite3.Connection,
     provider: str,
@@ -1792,6 +1812,7 @@ def import_metrics(
     year: int,
     mapping_path: Path | None,
     encoding: str | None,
+    replace_edition: bool = False,
 ) -> dict[str, Any]:
     if provider not in {"jcr", "cas"}:
         raise LitWatchError("provider must be jcr or cas")
@@ -1832,12 +1853,16 @@ def import_metrics(
                         f"Conflicting JIF values for one journal/year in the import: {seen_jif[identity]} vs {value}"
                     )
                 seen_jif[identity] = value
-    with path.open("rb") as source_file:
-        source_hash = hashlib.file_digest(source_file, "sha256").hexdigest()
+    source_hash = file_sha256(path)
     imported_at = iso_now()
     inserted = 0
     skipped = 0
     with conn:
+        if replace_edition:
+            conn.execute(
+                "DELETE FROM journal_metrics WHERE provider=? AND metric_year=?",
+                (provider, year),
+            )
         for row in rows:
             journal = str(row.get(mapping.get("journal", ""), "") or "").strip()
             issns = {
@@ -1920,8 +1945,8 @@ def import_metrics(
                         (provider, year, issn, normalize_journal(journal), payload, source_hash, imported_at),
                     )
                     inserted += int(cursor.rowcount > 0 and conn.total_changes > before)
-    if inserted == 0:
-        raise LitWatchError(f"Metrics file contains no usable {provider.upper()} records: {path}")
+        if inserted == 0:
+            raise LitWatchError(f"Metrics file contains no usable {provider.upper()} records: {path}")
     return {
         "provider": provider,
         "metric_year": year,
@@ -1933,8 +1958,52 @@ def import_metrics(
         "mapping": mapping,
         "input_layout": input_layout,
         "source_sha256": source_hash,
-        "note": "The source file was not copied into the LitWatch package or workspace.",
+        "replace_edition": replace_edition,
+        "note": "The source was read in place and not copied into the workspace.",
     }
+
+
+def import_bundled_metrics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Import the verified bundled 2025 editions unless that edition already exists."""
+    checked: list[tuple[dict[str, Any], Path]] = []
+    for spec in BUNDLED_METRICS:
+        path = BUNDLED_METRICS_DIR / spec["filename"]
+        if not path.is_file():
+            raise LitWatchError(f"Bundled metrics file is missing: {path}. Re-download the complete repository.")
+        actual_hash = file_sha256(path)
+        if actual_hash != spec["sha256"]:
+            raise LitWatchError(
+                f"Bundled metrics integrity check failed: {path}. Re-download the complete repository."
+            )
+        checked.append((spec, path))
+
+    results: list[dict[str, Any]] = []
+    for spec, path in checked:
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM journal_metrics WHERE provider=? AND metric_year=?",
+            (spec["provider"], spec["year"]),
+        ).fetchone()[0]
+        if existing:
+            results.append({
+                "provider": spec["provider"],
+                "metric_year": spec["year"],
+                "status": "already available",
+                "records": existing,
+            })
+            continue
+        imported = import_metrics(conn, spec["provider"], path, spec["year"], None, None)
+        results.append({
+            "provider": spec["provider"],
+            "metric_year": spec["year"],
+            "status": "imported",
+            "records": imported["records_inserted"],
+        })
+    return results
+
+
+def metric_source_label(source_hash: str) -> str:
+    bundled_hashes = {spec["sha256"] for spec in BUNDLED_METRICS}
+    return "ShowJCR snapshot" if source_hash in bundled_hashes else "local import"
 
 
 def local_metrics(
@@ -1949,14 +2018,14 @@ def local_metrics(
     rows: list[sqlite3.Row] = []
     if issns:
         rows = conn.execute(
-            "SELECT metric_year,data_json FROM journal_metrics WHERE provider=? AND issn IN ("
+            "SELECT metric_year,data_json,source_hash FROM journal_metrics WHERE provider=? AND issn IN ("
             + ",".join("?" for _ in issns) + ")",
             (provider, *sorted(issns)),
         ).fetchall()
     journal_norm = normalize_journal(work.get("journal"))
     if not rows and journal_norm:
         rows = conn.execute(
-            "SELECT metric_year,data_json FROM journal_metrics WHERE provider=? AND journal_norm=?",
+            "SELECT metric_year,data_json,source_hash FROM journal_metrics WHERE provider=? AND journal_norm=?",
             (provider, journal_norm),
         ).fetchall()
     if not rows:
@@ -1971,7 +2040,11 @@ def local_metrics(
     output: list[dict[str, Any]] = []
     for row in rows:
         data = json.loads(row["data_json"])
-        data.update({"provider": provider, "metric_year": row["metric_year"]})
+        data.update({
+            "provider": provider,
+            "metric_year": row["metric_year"],
+            "source": metric_source_label(row["source_hash"]),
+        })
         if data not in output:
             output.append(data)
     return output
@@ -3295,30 +3368,48 @@ def resolve_workspace(value: str | None) -> Path:
 
 def command_init(args: argparse.Namespace) -> int:
     workspace = resolve_workspace(args.workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
     config_path = workspace / "config.json"
     db_path = workspace / "litwatch.db"
-    if config_path.exists() or db_path.exists():
-        if not (config_path.exists() and db_path.exists()):
-            raise LitWatchError("Workspace is partially initialized; move it aside or restore the missing file")
-        cfg = load_config(workspace)
-        conn = connect_db(workspace)
-        conn.close()
-        print(json.dumps({"workspace": str(workspace), "status": "already initialized", "schema_version": cfg["schema_version"]}, ensure_ascii=False))
-        return 0
-    workspace.mkdir(parents=True, exist_ok=True)
-    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
-    if args.preset:
-        preset_path = ROOT / "presets" / f"{args.preset}.json"
-        if not preset_path.is_file():
-            available = sorted(path.stem for path in (ROOT / "presets").glob("*.json")) if (ROOT / "presets").exists() else []
-            raise LitWatchError(f"Unknown preset {args.preset!r}. Available: {', '.join(available) or 'none'}")
-        preset = read_json(preset_path)
-        cfg = merge_known(cfg, preset, "preset")
-    validate_config(cfg)
-    write_json(config_path, cfg)
-    conn = connect_db(workspace, create=True)
-    conn.close()
-    print(json.dumps({"workspace": str(workspace), "status": "initialized", "preset": args.preset}, ensure_ascii=False))
+    with run_lock(workspace):
+        if config_path.exists() or db_path.exists():
+            if not (config_path.exists() and db_path.exists()):
+                raise LitWatchError("Workspace is partially initialized; move it aside or restore the missing file")
+            cfg = load_config(workspace)
+            conn = connect_db(workspace)
+            try:
+                bundled_metrics = import_bundled_metrics(conn)
+            finally:
+                conn.close()
+            payload = {
+                "workspace": str(workspace),
+                "status": "already initialized",
+                "schema_version": cfg["schema_version"],
+                "bundled_metrics": bundled_metrics,
+            }
+        else:
+            cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+            if args.preset:
+                preset_path = ROOT / "presets" / f"{args.preset}.json"
+                if not preset_path.is_file():
+                    available = sorted(path.stem for path in (ROOT / "presets").glob("*.json")) if (ROOT / "presets").exists() else []
+                    raise LitWatchError(f"Unknown preset {args.preset!r}. Available: {', '.join(available) or 'none'}")
+                preset = read_json(preset_path)
+                cfg = merge_known(cfg, preset, "preset")
+            validate_config(cfg)
+            write_json(config_path, cfg)
+            conn = connect_db(workspace, create=True)
+            try:
+                bundled_metrics = import_bundled_metrics(conn)
+            finally:
+                conn.close()
+            payload = {
+                "workspace": str(workspace),
+                "status": "initialized",
+                "preset": args.preset,
+                "bundled_metrics": bundled_metrics,
+            }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -3487,6 +3578,7 @@ def _command_metrics_import(args: argparse.Namespace, workspace: Path) -> int:
         args.year,
         Path(args.mapping).expanduser().resolve() if args.mapping else None,
         args.encoding,
+        getattr(args, "replace_edition", False),
     )
     conn.close()
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -3500,7 +3592,16 @@ def metric_status(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "COUNT(DISTINCT source_hash) AS source_files,MAX(imported_at) AS last_imported_at "
         "FROM journal_metrics GROUP BY provider,metric_year ORDER BY provider,metric_year DESC"
     ).fetchall()
-    return [dict(row) for row in rows]
+    output = []
+    for row in rows:
+        item = dict(row)
+        hashes = conn.execute(
+            "SELECT DISTINCT source_hash FROM journal_metrics WHERE provider=? AND metric_year=?",
+            (row["provider"], row["metric_year"]),
+        ).fetchall()
+        item["sources"] = sorted({metric_source_label(value["source_hash"]) for value in hashes})
+        output.append(item)
+    return output
 
 
 def command_metrics_status(args: argparse.Namespace) -> int:
@@ -3626,7 +3727,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"LitWatch {VERSION}")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = commands.add_parser("init", help="Initialize a separate writable workspace")
+    init_parser = commands.add_parser("init", help="Initialize a workspace and load bundled 2025 journal metrics")
     add_workspace_argument(init_parser)
     init_parser.add_argument("--preset", help="Optional bundled preset, e.g. pathology-molecular")
     init_parser.set_defaults(handler=command_init)
@@ -3651,7 +3752,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_arguments(watch_parser)
     watch_parser.set_defaults(handler=lambda args: command_discover(args, "watch"))
 
-    metrics_parser = commands.add_parser("metrics", help="Manage authorized local journal metrics")
+    metrics_parser = commands.add_parser("metrics", help="Inspect bundled or import custom journal metrics")
     metrics_commands = metrics_parser.add_subparsers(dest="metrics_command", required=True)
     metrics_import = metrics_commands.add_parser("import", help="Import a local CAS or JCR CSV without copying the source file")
     add_workspace_argument(metrics_import)
@@ -3660,6 +3761,11 @@ def build_parser() -> argparse.ArgumentParser:
     metrics_import.add_argument("--year", type=int, required=True, help="Metric year; kept separate from release year")
     metrics_import.add_argument("--mapping", help="Optional JSON mapping from canonical fields to CSV headers")
     metrics_import.add_argument("--encoding", help="Optional explicit file encoding")
+    metrics_import.add_argument(
+        "--replace-edition",
+        action="store_true",
+        help="Atomically replace every existing row for this provider and metric year",
+    )
     metrics_import.set_defaults(handler=command_metrics_import)
     metrics_status = metrics_commands.add_parser("status", help="Show imported metric editions and coverage")
     add_workspace_argument(metrics_status)

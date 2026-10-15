@@ -572,6 +572,77 @@ class StateTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("jcr 2025", next(check["detail"] for check in report["checks"] if check["name"] == "journal_metrics"))
 
+    def test_init_imports_bundled_metrics_once(self):
+        bundle = self.root / "bundled-metrics"
+        bundle.mkdir()
+        jcr = bundle / "jcr.csv"
+        cas = bundle / "cas.csv"
+        jcr.write_text("Journal,ISSN,Quartile,Impact Factor\nJ,1234-5678,Q1,8.0\n", encoding="utf-8")
+        cas.write_text("Journal,ISSN,Major Category,Major Zone\nJ,1234-5678,医学,1\n", encoding="utf-8")
+        specs = (
+            {"provider": "jcr", "year": 2025, "filename": jcr.name, "sha256": lw.file_sha256(jcr)},
+            {"provider": "cas", "year": 2025, "filename": cas.name, "sha256": lw.file_sha256(cas)},
+        )
+        workspace = self.root / "new-workspace"
+        with patch.object(lw, "BUNDLED_METRICS_DIR", bundle), patch.object(lw, "BUNDLED_METRICS", specs):
+            first_output = io.StringIO()
+            with patch("sys.stdout", first_output):
+                self.assertEqual(lw.command_init(argparse.Namespace(workspace=str(workspace), preset=None)), 0)
+            first = json.loads(first_output.getvalue())
+            self.assertEqual({item["status"] for item in first["bundled_metrics"]}, {"imported"})
+
+            conn = lw.connect_db(workspace, readonly=True)
+            first_count = conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0]
+            self.assertEqual(lw.metric_status(conn)[0]["sources"], ["ShowJCR snapshot"])
+            conn.close()
+
+            second_output = io.StringIO()
+            with patch("sys.stdout", second_output):
+                self.assertEqual(lw.command_init(argparse.Namespace(workspace=str(workspace), preset=None)), 0)
+            second = json.loads(second_output.getvalue())
+            self.assertEqual({item["status"] for item in second["bundled_metrics"]}, {"already available"})
+
+            conn = lw.connect_db(workspace, readonly=True)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0], first_count)
+            conn.close()
+
+    def test_bundled_metric_integrity_fails_before_any_import(self):
+        bundle = self.root / "damaged-bundle"
+        bundle.mkdir()
+        jcr = bundle / "jcr.csv"
+        cas = bundle / "cas.csv"
+        jcr.write_text("Journal,ISSN,Quartile\nJ,1234-5678,Q1\n", encoding="utf-8")
+        cas.write_text("Journal,ISSN,Major Zone\nJ,1234-5678,1\n", encoding="utf-8")
+        specs = (
+            {"provider": "jcr", "year": 2025, "filename": jcr.name, "sha256": lw.file_sha256(jcr)},
+            {"provider": "cas", "year": 2025, "filename": cas.name, "sha256": "0" * 64},
+        )
+        with patch.object(lw, "BUNDLED_METRICS_DIR", bundle), patch.object(lw, "BUNDLED_METRICS", specs):
+            with self.assertRaises(lw.LitWatchError):
+                lw.import_bundled_metrics(self.conn)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0], 0)
+
+    def test_bundled_metrics_keep_an_existing_provider_edition(self):
+        custom = self.root / "custom-jcr.csv"
+        custom.write_text("Journal,ISSN,Quartile\nCustom,1234-5678,Q2\n", encoding="utf-8")
+        lw.import_metrics(self.conn, "jcr", custom, 2025, None, None)
+
+        bundle = self.root / "replacement-bundle"
+        bundle.mkdir()
+        jcr = bundle / "jcr.csv"
+        cas = bundle / "cas.csv"
+        jcr.write_text("Journal,ISSN,Quartile\nBundled,8765-4321,Q1\n", encoding="utf-8")
+        cas.write_text("Journal,ISSN,Major Zone\nBundled,8765-4321,1\n", encoding="utf-8")
+        specs = (
+            {"provider": "jcr", "year": 2025, "filename": jcr.name, "sha256": lw.file_sha256(jcr)},
+            {"provider": "cas", "year": 2025, "filename": cas.name, "sha256": lw.file_sha256(cas)},
+        )
+        with patch.object(lw, "BUNDLED_METRICS_DIR", bundle), patch.object(lw, "BUNDLED_METRICS", specs):
+            result = lw.import_bundled_metrics(self.conn)
+        self.assertEqual(next(item["status"] for item in result if item["provider"] == "jcr"), "already available")
+        names = {row[0] for row in self.conn.execute("SELECT journal_norm FROM journal_metrics WHERE provider='jcr'")}
+        self.assertEqual(names, {"custom"})
+
     def test_preprint_to_published_event(self):
         preprint = work(doi="10.1/pre", openalex_id="WPRE", is_preprint=True, type="preprint", journal="")
         published = work(doi="10.1/pre", openalex_id="WPRE", is_preprint=False, type="article")
@@ -787,7 +858,7 @@ class StateTest(unittest.TestCase):
         cas_summary = lw.import_metrics(self.conn, "cas", cas_source, 2025, None, None)
         self.assertEqual((cas_summary["input_layout"], cas_summary["rows_read"], cas_summary["normalized_rows"]), ("wide", 1, 3))
         cas = lw.local_metrics(self.conn, work(issn_l="8765-4321", issns=[]), "cas", 2025)
-        self.assertIn({"journal": "J", "scope": "major", "category": "医学", "zone": "1", "top": True, "provider": "cas", "metric_year": 2025}, cas)
+        self.assertIn({"journal": "J", "scope": "major", "category": "医学", "zone": "1", "top": True, "provider": "cas", "metric_year": 2025, "source": "local import"}, cas)
         self.assertEqual({(row["category"], row["zone"]) for row in cas if row["scope"] == "minor"}, {("A", "1"), ("B", "2")})
 
         status = lw.metric_status(self.conn)
@@ -814,6 +885,28 @@ class StateTest(unittest.TestCase):
         with self.assertRaises(lw.LitWatchError):
             lw.import_metrics(self.conn, "jcr", invalid, 2025, None, None)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0], 0)
+
+    def test_metric_replace_edition_is_atomic(self):
+        original = self.root / "original-metrics.csv"
+        original.write_text("Journal,ISSN,Quartile\nOriginal,1234-5678,Q2\n", encoding="utf-8")
+        lw.import_metrics(self.conn, "jcr", original, 2025, None, None)
+
+        invalid = self.root / "invalid-replacement.csv"
+        invalid.write_text("Journal,ISSN,Quartile\nBroken,8765-4321,Q10\n", encoding="utf-8")
+        with self.assertRaises(lw.LitWatchError):
+            lw.import_metrics(self.conn, "jcr", invalid, 2025, None, None, replace_edition=True)
+        self.assertEqual(
+            {row[0] for row in self.conn.execute("SELECT journal_norm FROM journal_metrics WHERE provider='jcr'")},
+            {"original"},
+        )
+
+        replacement = self.root / "replacement-metrics.csv"
+        replacement.write_text("Journal,ISSN,Quartile\nReplacement,8765-4321,Q1\n", encoding="utf-8")
+        lw.import_metrics(self.conn, "jcr", replacement, 2025, None, None, replace_edition=True)
+        self.assertEqual(
+            {row[0] for row in self.conn.execute("SELECT journal_norm FROM journal_metrics WHERE provider='jcr'")},
+            {"replacement"},
+        )
 
     def test_seed_and_metric_writes_respect_workspace_lock(self):
         workspace = self.root / "locked-workspace"

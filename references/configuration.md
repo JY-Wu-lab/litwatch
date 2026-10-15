@@ -99,15 +99,19 @@ journal metrics are venue-level proxies, not paper-quality scores.
 
 ### Choose the data path before configuring a filter
 
-1. Run `metrics status`. If the requested provider and edition are already
-   listed, select that exact year in config.
-2. If the user has an authorized JCR or historical CAS export, keep it anywhere
-   the host can read; `WORKSPACE/local-metrics/` is only a recommended private
-   location. LitWatch accepts CSV, not XLSX. Convert the relevant worksheet to
-   CSV locally when necessary, then run `metrics import` explicitly.
-3. If the user has no authorized table, do not block ordinary discovery and do
-   not obtain a mirror on the user's behalf. Leave JCR/CAS/JIF criteria disabled,
-   say that these metrics are unavailable, and optionally display the public
+1. Run `init`, which verifies and imports the bundled JCR 2025/JIF and historical
+   CAS 2025 ShowJCR snapshots. Run `metrics status` to confirm them.
+2. If the requested provider and edition are listed, select that exact year in
+   config. Treat the bundled edition as a third-party snapshot, not an official
+   export.
+3. For another edition, keep the user's authorized CSV anywhere the host can
+   read; `WORKSPACE/local-metrics/` is only a recommended private location.
+   LitWatch accepts CSV, not XLSX. Convert the relevant worksheet locally, then
+   run `metrics import` explicitly. The default merges records. Use
+   `--replace-edition` only for a complete table that should atomically replace
+   the same provider/year; never use it for a partial category export.
+4. If the requested edition is unavailable, do not block ordinary discovery.
+   Leave that JCR/CAS/JIF criterion disabled, state the gap, and optionally show
    `OpenAlex 2-year mean citedness` under that exact label. It is neither JIF nor
    a partition.
 
@@ -138,8 +142,8 @@ When hard_filter is true, every configured criterion is combined with AND:
 
 - OpenAlex min_2yr_mean_citedness: public OpenAlex source statistic. It is not
   Journal Impact Factor and must never be labeled JIF.
-- JCR quartiles, minimum impact factor, and optional categories: use only local
-  authorized imports. year selects an exact metric edition; null uses the
+- JCR quartiles, minimum impact factor, and optional categories: use a bundled
+  or user-imported edition. year selects an exact metric edition; null uses the
   latest dated import. aggregation is worst by default across matched category
   quartiles; best is available only when explicitly selected.
 - CAS zones: choose major or minor scope and best/worst aggregation.
@@ -193,7 +197,8 @@ headers. Supported keys are journal, issn, eissn, category, quartile,
 impact_factor, cas_major_category, cas_major_zone, cas_minor_category, and
 cas_minor_zone, and top. The input file is hashed but never copied.
 
-`metrics status` reports which provider/year editions are actually loaded.
+`metrics status` reports which provider/year editions are loaded and labels
+their provenance as `ShowJCR snapshot` or `local import`.
 `doctor` also fails when a configured JCR/CAS hard filter has no matching local
 edition. No import means no JCR/CAS annotation or truthful partition filter;
 OpenAlex two-year mean citedness is a different statistic and is never used to
@@ -207,10 +212,10 @@ one file reject the import atomically. If matches from different identifiers or
 prior data still disagree, LitWatch reports a data conflict and leaves that
 filter pending. Aggregation applies to category quartiles, never to JIF.
 
-JCR and CAS data are intentionally absent from this repository. Access and reuse
-depend on the provider and the user's subscription or institutional terms;
-possession of a third-party mirror does not prove provenance or redistribution
-rights.
+The repository includes checksummed JCR 2025 and historical CAS 2025 snapshots
+from the public ShowJCR repository. They retain upstream terms and are not
+official certification. User-supplied editions remain local to the workspace;
+access and reuse depend on their provider and the user's terms.
 
 ## Preset
 

@@ -28,16 +28,16 @@
 4. 在自己的电脑上选择一个有写入权限、并且位于 LitWatch 程序目录之外的文件夹。
    将下面的 `<你的工作目录>` 替换成它的实际路径，再把整段话交给模型：
 
-       使用 LitWatch，把 <你的工作目录> 作为工作目录。将我上传的论文作为
-       相关样本，先预览检索结果，不要保存。说明每篇候选为什么入选、待核实或排除。
+       使用 LitWatch，把 <你的工作目录> 作为工作目录。先初始化该目录，再将我上传的
+       论文作为相关样本，预览检索结果，不要保存。说明每篇候选为什么入选、待核实或排除。
        我确认后再正式保存结果，并在当前对话中详细解读最多 3 篇真正相关且能够读取
        全文的论文。给出投稿/收稿、修回、接受和出版日期及其来源，并附直达链接；
        查不到的信息写“不可得”，不要猜测。
 
-没有 JCR 或中科院分区表也可以正常检索。只有当你明确要求显示或筛选 JCR 分区、JIF
-或历史中科院分区时，才需要导入自己有权使用的对应版本 CSV；没有表时不要让模型猜，
-也不要把 OpenAlex 指标冒充 JIF。具体取得方式和“无表”提示词见“怎样使用 JCR、中科院
-分区和影响因子”。
+仓库已经附带 2025 版 JCR/JIF 和历史中科院分区快照。第一次执行 `init` 时会先核对文件，
+再自动导入工作目录，不需要你寻找或摆放 CSV。执行 `metrics status` 可以查看是否成功。
+需要其它年份或自己的版本时，才要另外导入 CSV。内置表来自公开的 ShowJCR 快照，不等于
+官方认证；用于正式评价时仍应向原发布方复核。
 
 想每天自动追踪时，先完成并保存一次基线检索，再告诉模型每天几点、所在时区、工作目录，
 以及“无新增时保持安静”还是“每天也要报平安”。可直接复制的提示词见“每天自动追踪”；
@@ -65,7 +65,7 @@
 | 必需 | 一个保存记录的工作目录 | 你自己选择的、可写且位于 LitWatch 程序目录之外的文件夹 |
 | 可选 | 明确不相关、但容易被误找出来的论文 | 用来减少同类误报 |
 | 可选 | 年份、开放获取、论文类型等要求 | “只要 2022 年以后”“排除综述” |
-| 可选 | 你有权使用的 JCR 或中科院分区 CSV | 只在需要按分区或 JIF 筛选时使用 |
+| 可选 | 其它年份或自己的 JCR/中科院分区 CSV | 内置 2025 版不需要你提供 |
 
 ### 它依次做什么
 
@@ -131,7 +131,7 @@
 - 每篇候选的入选、待核实或排除原因；
 - 可核实的 DOI、出版社、PubMed、arXiv、OpenAlex 或公开全文入口；
 - 能查到时给出投稿/收稿、修回、接受、在线出版和纸本出版日期及来源；
-- 工作目录中的 JSON、Markdown 和 CSV 报告，便于后续复查或继续监测。
+- 工作目录中的 JSON、Markdown、CSV 和累计 Excel，便于后续复查或继续监测。
 
 ### 它不会做什么
 
@@ -139,7 +139,8 @@
 - 不绕过付费墙、账号登录、CAPTCHA 或下载权限；
 - 不把影响因子或期刊分区当作单篇论文质量；
 - 不猜测缺失的分区、日期、全文内容或研究结论；
-- 不会因为文件放进某个目录就自动导入，也不会自行创建定时任务。
+- 不会自动导入你随手放入目录的自定义文件，也不会自行创建定时任务；内置 2025 表只在
+  `init` 时自动导入。
 
 LitWatch 的检索程序不绑定某个模型，但模型必须能运行 Python、访问网络并读写文件。
 如果只是普通聊天模型、没有这些工具，它只能解读你直接提供的材料，不能实时查文献。
@@ -151,6 +152,8 @@ LitWatch 的检索程序不绑定某个模型，但模型必须能运行 Python�
 - Python 3.11 或更高版本；
 - 实时发现需要访问已启用来源的 HTTPS；
 - Skill 目录之外的持久可写 workspace；
+- 建议为 workspace 预留至少 200 MB；仅两份内置指标导入后的数据库约 90 MB，后续报告和
+  缓存还会继续增长；
 - 可选：解析本地 PDF 种子需要 pypdf；
 - 全文解读需要宿主具备文档读取能力，以及用户提供或依法可访问的论文；仅摘要解读
   不增加 Python 依赖。
@@ -168,7 +171,7 @@ LitWatch 的检索程序不绑定某个模型，但模型必须能运行 Python�
     python scripts/litwatch.py --version
 
 也可以下载 GitHub ZIP 后解压。选中的 Skill 文件夹必须是直接包含 `SKILL.md`、
-`scripts/` 和 `references/` 的目录，不能选它的上一级目录。
+`scripts/`、`references/` 和 `bundled-metrics/` 的目录，不能选它的上一级目录。
 
 ### 仓库文件目录
 
@@ -185,6 +188,11 @@ workspace：
     │   └── openai.yaml
     ├── scripts/
     │   └── litwatch.py
+    ├── bundled-metrics/
+    │   ├── README.md
+    │   ├── COPYING.GPL-3.0
+    │   ├── JCR2025-UTF8.csv
+    │   └── FQBJCR2025-UTF8.csv
     ├── references/
     │   ├── configuration.md
     │   ├── sources-and-ranking.md
@@ -202,6 +210,7 @@ workspace：
 |---|---|
 | `SKILL.md` | 大模型首先读取的核心工作规范，包括检索、筛选和精读边界 |
 | `scripts/litwatch.py` | 实际执行初始化、种子导入、检索、监测、指标导入和报告生成 |
+| `bundled-metrics/` | 随包的 2025 JCR/JIF 与历史中科院分区快照；`init` 自动核验和导入 |
 | `references/` | 模型按任务读取的详细规则；不是要求普通用户一次读完的教程 |
 | `agents/openai.yaml` | 可选的 OpenAI 界面元数据；核心程序不依赖它 |
 | `presets/` | 可选示例配置；不会替代用户自己的种子论文 |
@@ -222,11 +231,12 @@ workspace：
     └── litwatch/
         ├── SKILL.md
         ├── scripts/
-        └── references/
+        ├── references/
+        └── bundled-metrics/
 
 不能只复制 `SKILL.md`：文献发现需要 `scripts/litwatch.py`，详细解读依赖
-`references/` 中的协议。`agents/openai.yaml` 只是可选的 OpenAI UI 适配器，核心
-功能不依赖 OpenAI。
+`references/` 中的协议，自动分区导入需要 `bundled-metrics/`。`agents/openai.yaml`
+只是可选的 OpenAI UI 适配器，核心功能不依赖 OpenAI。
 
 Skill 的发现路径和调用语法由宿主决定，也可能更新，应以对应宿主的当前文档为准。
 如果宿主没有原生 Skill 加载功能，但能读取本地文件并运行 Python，可以直接告诉它
@@ -245,12 +255,13 @@ Skill 的发现路径和调用语法由宿主决定，也可能更新，应以�
 | 相关论文发现、排序、去重与报告 | 是 | Python 3.11+、网络、可写 workspace |
 | 公开期刊指标标注 | 是 | OpenAlex 2-year mean citedness；绝不标成 JIF |
 | 在对话中详细解读 | 可读取全文时可以 | 宿主具备文档/网页读取能力，且全文可合法访问 |
-| JCR 分区/JIF 或中科院分区标注与筛选 | 否 | 每个 workspace 首次使用时导入本地合法授权的 CSV |
+| 2025 JCR 分区/JIF 与历史中科院分区标注、筛选 | 是 | 第一次 `init` 自动导入内置快照 |
+| 其它年份或自己的期刊指标表 | 否 | 使用 `metrics import` 导入对应 CSV |
 | 每日自动监测 | 追踪引擎可以，自动唤醒取决于宿主 | LitWatch 提供增量 `watch`；宿主定时器或操作系统调度器负责每天触发 |
 
-因此，新用户没有 JCR/CAS 表也能立即检索。用户要求 JCR、JIF 或中科院分区筛选时，
-不能偷换成 OpenAlex 指标，也不能猜测分区；必须先导入有权使用的数据，否则明确标为
-不可得。
+因此，新用户下载完整仓库后，只需正常执行 `init`，2025 版指标即可使用。若用户指定
+其它年份，不能拿 2025 版或 OpenAlex 指标替代，也不能猜测；应导入指定版本，否则明确
+标为不可得。
 
 ## 种子文件和期刊指标文件放在哪里
 
@@ -282,7 +293,7 @@ TXT、BibTeX、RIS 或 JSON。反例种子是已知误报，用来告诉排序�
     │   │   └── example-paper.pdf
     │   └── negative/
     │       └── false-positives.ris
-    └── local-metrics/              仅存放有权使用的指标文件
+    └── local-metrics/              可选，只放你自己的其它指标文件
         ├── jcr-authorized.csv      使用你实际拥有的文件名
         └── cas-authorized.csv      使用你实际拥有的文件名
 
@@ -311,9 +322,9 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
     论文样本。先运行 `seed list`，向我确认成功加入的论文，再做一次只预览、不保存的
     检索（dry-run）。
 
-分区表与种子文件相互独立。只把 CSV 放进 `WORKSPACE/local-metrics/` 不会自动启用。
-需要分区或影响因子时，直接复制“怎样使用 JCR、中科院分区和影响因子”开头的统一
-提示词；它同时覆盖“已有表”“只有 Excel”和“没有表”三种情况。
+分区表与种子文件相互独立。内置 2025 表由 `init` 自动导入；你自己放进
+`WORKSPACE/local-metrics/` 的文件不会自动启用，仍需执行 `metrics import`。需要分区或
+影响因子时，直接复制“怎样使用 JCR、中科院分区和影响因子”开头的提示词即可。
 
 ## 使用方式一：直接告诉大模型
 
@@ -332,9 +343,9 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 
 ### 按期刊分区或影响因子筛选
 
-不用先研究字段或命令。直接使用下文“最简单：把这段话交给大模型”的统一提示词；
-有表就同时提供文件，没有表也能先按主题检索。模型不能仅凭文件名证明数据是官方版本，
-需要正式认定时仍应以发布方或所在机构的有效记录为准。
+不用先研究字段或命令。需要 2025 版时，直接使用下文“最简单：把这段话交给大模型”
+的提示词，不用另附表格；需要其它年份时再提供自己的文件。内置快照不等于官方证明，
+正式认定仍应以发布方或所在机构的有效记录为准。
 
 ### 继续已有监测
 
@@ -386,6 +397,12 @@ A 和 B”“修改年份/OA 条件后做一次 dry-run 预览”。详细解读
 1. 初始化独立运行目录：
 
        python scripts/litwatch.py init --workspace "WORKSPACE"
+
+   首次执行会核对并导入约 15 万条 JCR/CAS 规范化记录，可能需要稍等。看到
+   `status: imported` 后，可用下面命令确认；再次执行 `init` 会显示
+   `already available`，不会重复导入：
+
+       python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
 2. 添加两篇或更多正例：
 
@@ -485,19 +502,20 @@ seed add 默认追加。--replace 只替换正例；若同时使用 --negative�
 
     python scripts/litwatch.py init --workspace "WORKSPACE" --preset pathology-molecular
 
-它不含论文全文、JCR/CAS 表或隐藏门槛；种子仍是主题的真实来源。
+这个 preset 本身不含论文、期刊名单或隐藏门槛；所有 `init` 都会另行导入仓库内置的
+两份 2025 指标表。种子仍是主题的真实来源。
 
 ## 参考：命令速查
 
 | 命令 | 用途 |
 |---|---|
-| init | 在独立 workspace 创建 config.json 与 litwatch.db |
+| init | 创建 workspace，并自动核验、导入内置 2025 期刊指标 |
 | seed add | 追加/替换正例或反例 |
 | seed list | 显示安全的种子标题与标识符 |
 | discover | 建立或重建较宽的基线 |
 | watch | 只报告新论文和有意义的生命周期/状态事件 |
 | metrics import | 把用户持牌的 JCR/CAS CSV 导入本地 SQLite |
-| metrics status | 显示已导入的提供方、版本年份、期刊/ISSN 覆盖及导入时间 |
+| metrics status | 显示来源标签、提供方、版本年份、期刊/ISSN 覆盖及导入时间 |
 | doctor | 检查 Python、配置、数据库、可选 PDF 支持和 API |
 
 discover 与 watch 支持 --since、--until、--dry-run、--explain；日期格式为 YYYY-MM-DD。
@@ -584,36 +602,39 @@ OA 落地页、供应商明确标注的 PDF、PubMed、arXiv 和 OpenAlex 链接
 
 ## 怎样使用 JCR、中科院分区和影响因子
 
-默认情况下，LitWatch 只把期刊指标显示在结果旁边，不会因为分区低就自动删除论文。
-这样可以避免把“期刊整体指标”误当成“这篇论文的质量”。只有你明确开启必须满足的
-条件后，分区或影响因子才参与排除。
+下载完整仓库后，不需要自己准备 2025 分区表。`init` 会自动导入内置的 JCR 2025/JIF
+和历史中科院 2025 快照。默认只把指标显示在论文旁边，不会因为期刊分区低就删除论文；
+只有你明确提出筛选条件后，它们才参与排除。
 
 ### 最简单：把这段话交给大模型
 
-把尖括号里的内容换成自己的；不知道年份或条件就直接写“不确定”。有文件就同时上传或
-填写本地路径，没有文件也可以直接用：
+把尖括号里的内容换成自己的即可：
 
-    使用 $litwatch 和 <你的工作目录>。我想使用 <JCR 分区/JIF/历史中科院分区>，
-    版本年份是 <年份>，筛选条件是 <例如 JCR Q1/Q2、JIF 不低于 5，或中科院大类
-    1/2 区>。
+    使用 $litwatch 和 <你的工作目录>。先运行 init，再运行 metrics status，确认内置的
+    JCR 2025 和 CAS 2025 已经导入。我的期刊条件是：<例如 JCR Q1/Q2、JIF 不低于 5，
+    或中科院大类 1/2 区>。请帮我修改 config.json，但先不要正式保存检索结果。
 
-    如果我提供了文件，先只在本地检查来源说明、版本、工作表、编码和表头；若是
-    Excel，并且当前环境能够读取它，就把需要的工作表在本地转换成 CSV UTF-8，并整理
-    成 README 推荐的 JCR 或中科院长表格式；如果不能转换，明确告诉我用表格软件另存
-    哪个工作表，不能假装已经导入。先展示表头和少量预览，不要上传、公开或改写原文件。
-    确认可解析后再导入，运行 `metrics status`，告诉我版本、记录数和期刊数，然后先做
-    一次 dry-run。
+    先运行 doctor，再做一次 dry-run，把入选、待核实、排除及原因给我看。保留每条指标
+    的来源、年份和学科/大类或小类。没有匹配记录时列为待核实，不要猜分区，也不要把
+    OpenAlex 2-year mean citedness 写成 JIF。我确认后再正式运行。详细解读最多 3 篇，
+    宁缺毋滥。
 
-    如果我没有有权使用的分区表，不要下载来历不明的镜像，不要猜分区，也不要把
-    OpenAlex 2-year mean citedness 写成 JIF。告诉我应从哪个正式入口取得什么年份、
-    什么学科和什么格式；在取得前关闭 JCR/CAS/JIF 硬过滤，先按主题相关性检索。
+如果 `metrics status` 中已经有同一来源和年份，`init` 会保留它，不会重复追加或覆盖。
+内置表来自 ShowJCR 的公开快照，不是官方认证；正式考核、投稿或评价时应再查官方来源。
 
-    所有结果都保留数据来源、版本年份、JCR 学科或中科院大/小类；缺失或冲突先列为
-    “待核实”，除非我明确要求严格排除。只详细解读同时满足条件且能够读取全文的最多
-    3 篇论文，宁缺毋滥。
+### 需要其它年份或自己的表时
 
-这段提示词已覆盖“已有 CSV”“只有 Excel”“没有表”和“文件来源不确定”。模型可以
-检查现有证据，但不能凭空证明文件的授权或真实性。
+把 CSV/Excel 附给模型或填写本地路径，再使用：
+
+    使用 $litwatch 和 <你的工作目录>。我需要使用 <年份> 的 <JCR 或中科院分区>，
+    文件在 <文件路径>。先只在本地检查年份、工作表、编码和表头；不要上传或改写原件。
+    如果是 Excel，请把正确工作表转换为 CSV UTF-8。按 README 的推荐列名整理并导入，
+    然后运行 metrics status，告诉我导入的来源、年份、记录数和期刊数。最后先 dry-run，
+    不要在我确认前开启严格排除。如果同一来源和年份已经存在，先判断我的文件是不是
+    完整全表；只有完整全表才用 --replace-edition，局部导出不能清空原版本。无法确认的
+    来源或字段要明确写出来，不能猜。
+
+如果没有指定年份的数据，仍可按主题检索；关闭该指标的硬过滤并把相关字段写成“不可得”。
 
 ### 推荐给 LitWatch 的表格样式
 
@@ -642,9 +663,10 @@ LitWatch 能识别多种常见列名和宽表；下面两种长表最容易检�
 
 | 需要的数据 | 正式来源与常见取得方式 | 没有时怎么做 |
 |---|---|---|
-| JCR 分区 / JIF | 通过学校、医院、研究机构或个人权限进入 [Clarivate JCR](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/)，选择版本和学科后导出 CSV/Excel | 向图书馆或数据库管理员询问所需年份、学科和可用导出范围；不要让模型从非官方网页拼表 |
-| 历史中科院分区 | 通过有权使用的机构或个人账号访问[期刊分区表平台](https://www.fenqubiao.com/) | 联系图书馆或科研管理部门；2025 是最后一版官方历史数据，之后的第三方榜单不能称为“官方中科院分区” |
-| 都没有 | 不需要任何表 | 保持硬过滤关闭，照常检索；相关字段写“不可得” |
+| 只需要内置 2025 快照 | 仓库中的 `bundled-metrics/`，来源是公开的 [ShowJCR](https://github.com/hitfyd/ShowJCR) 仓库 | 正常运行 `init` 即可，不用手工放文件 |
+| 官方 JCR/JIF 或其它年份 | 通过学校、医院、研究机构或个人权限进入 [Clarivate JCR](https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/) 导出 | 向图书馆或数据库管理员询问所需年份和学科 |
+| 官方历史中科院分区 | 通过有权使用的机构或个人账号访问[期刊分区表平台](https://www.fenqubiao.com/) | 联系图书馆或科研管理部门；2025 是最后一版官方历史数据 |
+| 没有匹配版本 | 不需要硬凑一张表 | 关闭该项硬过滤，照常按主题检索；字段写“不可得” |
 
 Clarivate 的[导出说明](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals)
 指出网页每次导出排序后的前 600 条；网页端不提供完整全库下载，大规模接入需另行确认
@@ -656,10 +678,10 @@ JCR Q1–Q4 属于具体年份和具体学科；历史中科院分区是另一�
 公开的 `OpenAlex 2-year mean citedness` 也不是 JIF 或分区。来源不明的文件可以导入测试，
 但只能标为“用户提供的 JCR/CAS 格式数据，官方来源未核实”。
 
-### 辅助方法：自己放置和导入文件
+### 辅助方法：导入你自己的其它版本
 
-指标文件可以放在模型和命令行能读取的任何本地目录。为了以后容易找到，推荐放在运行
-workspace 的 `local-metrics/`，不要放进公开 Git 仓库：
+你自己的指标文件可以放在模型和命令行能读取的任何本地目录。为了以后容易找到，推荐
+放在运行 workspace 的 `local-metrics/`；这一目录与内置表无关，也不应公开上传：
 
     WORKSPACE/
     └── local-metrics/
@@ -677,13 +699,17 @@ workspace 的 `local-metrics/`，不要放进公开 Git 仓库：
 文件仍应按自己的许可和备份规则保管。非常规列名、宽表和 `--mapping` 见
 `references/configuration.md`。
 
-### 为什么仓库不附带分区表
+默认导入会与同一来源、同一年份的已有记录合并。如果你的文件是完整全表，并且要完全
+替换内置或旧版本，在命令末尾加 `--replace-edition`；该操作是原子的，导入失败会保留
+旧数据。局部学科导出不要使用这个选项，否则未包含的期刊会被删除。
 
-早期私人版本曾使用 [ShowJCR 项目](https://github.com/hitfyd/ShowJCR)提供的镜像布局。
-第三方仓库可以下载，不代表当前项目取得底层指标的来源证明或再分发权；代码许可证也
-不会自动覆盖其中的数据。JCR 的访问、导出、API 使用和再利用受 Clarivate 当前订阅与
-使用条件约束，中科院历史表也有自己的访问条件。因此 LitWatch 只提供本地导入器，不
-附带这些数据，也不会让模型自动寻找镜像。
+### 内置表从哪里来
+
+`bundled-metrics/` 中的两份 2025 CSV 来自公开的
+[ShowJCR 项目](https://github.com/hitfyd/ShowJCR)。`init` 会核对文件哈希后导入；文件缺失
+或被改动时会停止并提示重新下载完整仓库。LitWatch 程序代码采用 MIT License，这两份
+CSV 沿用上游仓库标注的 GPL-3.0 条款，许可证全文已随表附上。它们是方便检索的第三方
+快照，不是 Clarivate 或中科院平台为本项目出具的官方证明；正式评价时请复核。
 
 LitWatch 报告会显示 `JCR 2025 Q1`、`CAS 2025 major 1` 这样的来源与年份。
 `--provider jcr` 或 `--provider cas` 只是选择字段解析方式，不是官方真伪证明。来源无法
@@ -772,9 +798,10 @@ Markdown、CSV 和 Excel 均采用原子写入。
 | `library.csv` | 所有已保存论文的累计最新状态，包括 accepted、pending 和 rejected |
 | `accepted_papers.xlsx` | 所有曾 accepted 论文的累计去重 Excel；新入选逻辑追加，旧论文原行更新 |
 
-`init` 只创建 `config.json` 和 `litwatch.db`。`inputs/`、`local-metrics/` 是用户需要时
-自行创建的整理目录；`reports/` 只在首次非 dry-run 的 `discover` 或 `watch` 后出现。
-因此刚初始化后看不到 Excel 或 `latest.*` 是正常现象。
+`init` 创建 `config.json` 和 `litwatch.db`，并把仓库内置的两份 2025 指标表导入数据库；
+它不会把 CSV 复制到 workspace。`inputs/`、`local-metrics/` 是用户需要时自行创建的整理
+目录；`reports/` 只在首次非 dry-run 的 `discover` 或 `watch` 后出现。因此刚初始化后
+看不到 Excel 或 `latest.*` 是正常现象。
 
 `library.csv` 是全部已保存论文的累计当前状态，其中包括 pending 和 rejected。
 `accepted_papers.xlsx` 更适合直接用 Excel 汇总查看，只收录至少有一次通过筛选的论文。
@@ -957,8 +984,9 @@ Unregister-ScheduledTask -TaskName $TaskName
   `OPENALEX_EMAIL`，Crossref 的 `CROSSREF_EMAIL`，以及 PubMed 的 `NCBI_EMAIL`
   和可选 `NCBI_API_KEY`；不能在 `config.json` 中改名。
 - 不要公开 workspace、上传论文、包含敏感查询的报告、本地指标或环境文件。
-- 包内不含 JCR/CAS 全表或论文全文。精读请求可以使用用户提供或依法公开的副本，但
-  不授权登录账号、购买、绕过付费墙/CAPTCHA、批量下载或再分发。
+- 包内含来自 ShowJCR 的两份 2025 期刊指标快照，但不含论文全文。内置表不是官方认证；
+  自己另行导入的表和 workspace 不要公开。精读请求不授权登录账号、购买、绕过付费墙/
+  CAPTCHA、批量下载或再分发。
 
 详见 THIRD_PARTY_NOTICES.md 与 references/compatibility-and-security.md。
 
@@ -979,8 +1007,8 @@ OCR 暂不支持。
 **pending 太多**：补全种子的摘要/标识符，加入一两篇代表性反例，再根据标注样本调
 阈值。
 
-**找不到 JCR/CAS**：导入合法取得的本地 CSV，并核对字段映射。公开包故意不带专有
-表格。
+**找不到 JCR/CAS**：先重新运行 `init` 和 `metrics status`。若提示内置文件缺失或哈希
+不符，请重新下载完整仓库；若你需要的不是 2025 版，再导入相应 CSV。
 
 **数据库被占用**：可能有另一进程正在使用 workspace。SQLite 与运行锁防止并发写。
 超过六小时的遗留锁也不会自动删除，需先确认没有活动进程再处理。
@@ -992,10 +1020,10 @@ OCR 暂不支持。
     python -m unittest discover -s tests -v
 
 随后使用 skill-creator 的 quick validator 校验 Skill 元数据，并在全新临时 workspace
-做冒烟测试。测试只用合成/录制 fixture，不依赖 JCR/CAS、私人论文或实时 API。
+做冒烟测试。单元测试使用合成/录制 fixture；发布前的完整冒烟测试还应确认随包的两份
+CSV 能通过哈希检查并导入，不依赖私人论文或实时 API。
 
-旧个人脚本、日志、报告、示例全文和受许可限制的数据快照已放在发行包之外的私人备份，
-不会作为测试 fixture。
+旧个人脚本、日志、报告和示例全文仍放在发行包之外，不会作为测试 fixture。
 
 ## 更完整的能力边界
 
@@ -1009,7 +1037,9 @@ Scholar 直连、embedding、Web UI、托管服务、全文自动下载、消息
 
 ## 许可证与致谢
 
-LitWatch 代码采用 MIT License。Agent Skills 结构和部分工作流思想参考了公开的
+LitWatch 代码采用 MIT License。`bundled-metrics/` 中两份 CSV 沿用 ShowJCR 仓库的
+GPL-3.0 条款，详见 `bundled-metrics/README.md` 和 `THIRD_PARTY_NOTICES.md`。Agent
+Skills 结构和部分工作流思想参考了公开的
 [Gonglitian/agent-skills](https://github.com/Gonglitian/agent-skills)，但没有复制其中
 的代码、宿主专用命令、隐藏兄弟 Skill 依赖或受限数据。可移植入口遵循
 [Agent Skills specification](https://agentskills.io/specification)。
