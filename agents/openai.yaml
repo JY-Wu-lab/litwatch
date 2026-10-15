@@ -1,0 +1,4 @@
+interface:
+  display_name: "LitWatch"
+  short_description: "Literature discovery, monitoring, and deep reading"
+  default_prompt: "Use $litwatch to find related papers and render complete detailed readings of up to three eligible accepted matches directly in this chat without padding, including sourced submission/acceptance dates and direct links."
