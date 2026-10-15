@@ -1,9 +1,9 @@
 ---
 name: litwatch
-description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
+description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, one-off or scheduled daily literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “每天追踪文献”, “每日文献监测”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: MIT
 metadata:
-  version: "2.3.6"
+  version: "2.3.7"
   schema-version: "1"
 ---
 
@@ -85,6 +85,14 @@ with its absolute path.
    an incomplete run. `accepted_papers.xlsx` is a cumulative, deduplicated view
    of papers ever accepted; it is atomically rebuilt from SQLite, so manual
    workbook edits are overwritten and the file should be closed before a run.
+   When the user asks for daily, scheduled, recurring, or unattended tracking,
+   read [daily-monitoring.md](references/daily-monitoring.md). The CLI provides
+   the incremental watch engine but cannot wake itself after the model session
+   ends. Confirm the daily time, timezone, persistent workspace, and delivery
+   preference; establish one successful saved baseline; then, only with explicit
+   authorization, use a host-native recurring automation or an OS scheduler to
+   invoke `watch`. Do not claim that a schedule exists unless its creation was
+   verified. Do not pass a fixed `--since` on routine scheduled runs.
 6. Summarize results in the user's language. Preserve relationship labels
    (`reference`, `citation`, `related`, `search`, `pubmed_similar`) and the
    accepted/pending/rejected distinction. Call preprints unreviewed when known.
@@ -140,6 +148,8 @@ with its absolute path.
   explaining coverage, relationship signals, provenance, rate limits, or scores.
 - Read [compatibility-and-security.md](references/compatibility-and-security.md)
   for host support, privacy, scheduling, or publication guidance.
+- Read [daily-monitoring.md](references/daily-monitoring.md) whenever creating,
+  validating, or operating a recurring literature watch.
 - Read [output-schema.md](references/output-schema.md) when another tool will
   consume `latest.json`, SQLite state, `library.csv`, or
   `accepted_papers.xlsx`.

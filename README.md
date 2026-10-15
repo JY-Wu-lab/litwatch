@@ -10,11 +10,14 @@ explains why each result passed or failed. On later runs it remembers what it
 has already seen and reports what is new. When requested, the AI can also deeply
 read up to three relevant papers whose full text is actually available. It does
 not pad the count. Every saved search also maintains a cumulative Excel list of
-papers that have passed screening.
+papers that have passed screening. For daily tracking, a host automation or OS
+scheduler invokes the incremental `watch`; the Skill cannot remain resident
+after a model session ends.
 
 Search terms: paper search, related papers, literature discovery, citation
 snowballing, paper analysis, deep reading, critical appraisal, research
-monitoring, preprint tracking, JCR quartile, CAS partition.
+monitoring, daily literature tracking, preprint tracking, JCR quartile, CAS
+partition.
 
 > New here? Read “Quick start,” “Where to put seeds and journal-metric files,”
 > and “Usage mode 1 — ask an AI agent.” The rest is a reference manual.
@@ -42,6 +45,12 @@ only when you explicitly need JCR quartiles, JIF, or historical CAS partitions.
 Without a table, do not ask the model to guess or relabel an OpenAlex statistic
 as JIF. See “Using JCR, CAS partitions, and impact factors” for acquisition paths
 and copyable no-table prompts.
+
+For automatic daily tracking, first save one baseline search, then tell the
+model the daily time, timezone, workspace, and whether a clean no-change run
+should stay quiet or send a heartbeat. See “Automatic daily tracking” for a
+copyable prompt and “Creating an actual daily task” for baseline, creation, and
+verification steps.
 
 ### Plain-language glossary
 
@@ -195,6 +204,7 @@ belong here; they go in a separate workspace that you choose:
     ├── references/
     │   ├── configuration.md
     │   ├── sources-and-ranking.md
+    │   ├── daily-monitoring.md
     │   ├── interpretation.md
     │   ├── output-schema.md
     │   └── compatibility-and-security.md
@@ -259,7 +269,7 @@ capabilities are:
 | Public venue annotation | Yes | OpenAlex 2-year mean citedness; never labeled JIF |
 | Deep reading in chat | Yes, when text is readable | Host document/web reader plus lawful full text |
 | JCR quartile/JIF or CAS partition annotation/filtering | No | Import a locally authorized CSV edition once per workspace |
-| Scheduled monitoring | Host-dependent | Reuse `watch` from the host scheduler or another scheduler |
+| Automatic daily monitoring | Watch engine ready; wake-up is host-dependent | LitWatch supplies incremental `watch`; a host or OS scheduler triggers it daily |
 
 Therefore a new user can search immediately without JCR/CAS data. A request for
 JCR, JIF, or CAS filtering must not silently substitute OpenAlex metrics or
@@ -347,7 +357,7 @@ enable it; tell the model exactly which file, provider, and edition to import:
 After the host can see the skill, invoke it by its supported syntax—`$litwatch`
 is used below—or simply ask the model to use LitWatch. Give it a writable
 workspace, seed papers, the desired time/topic/metric constraints, and whether
-you want discovery, monitoring, or deep reading.
+you want discovery, automatic daily monitoring, or deep reading.
 
 ### First search plus deep reading
 
@@ -395,6 +405,42 @@ valid records from Clarivate, the former CAS publisher, or the user's institutio
     incremental watch from its saved checkpoint. Report only new papers and
     meaningful publication-status events, then interpret up to three newly
     eligible papers in this conversation.
+
+### Automatic daily tracking
+
+Daily tracking does not keep a chat window alive. An external scheduler invokes
+`watch` against the same workspace each day. A tool-capable model with recurring
+automation can search, read the fresh report, and deliver a digest. Windows Task
+Scheduler or cron can run the CLI and update local files, but cannot produce a
+chat message unless a separate notification integration is added.
+
+Replace the time, timezone, and workspace, then give this to a tool-capable model:
+
+    Use $litwatch to create a daily literature watch for the existing workspace
+    <YOUR_WORKSPACE>. Run every day at <LOCAL TIME, for example 08:30> in
+    <TIMEZONE, for example Asia/Shanghai>. First confirm that one saved baseline
+    completed successfully, then run `doctor --network` and one
+    `watch --dry-run` preflight.
+
+    If this host supports recurring automation, first show me the task name,
+    schedule, timezone, workspace, notification rule, and exact command. After I
+    explicitly confirm, call the platform's recurring-task facility and create
+    it. Return the task ID, next run time, and verification result. Otherwise
+    give me the correct OS scheduler settings, state clearly that nothing was
+    created, and never treat a printed prompt as an enabled task. Each daily invocation must run one non-dry-run
+    `watch` without a fixed `--since` and read the fresh report path returned by
+    that invocation. Notify me about new accepted papers, publication,
+    correction, concern, retraction, or a failed/incomplete run; stay quiet when
+    there is no meaningful change. Treat exit code 3 or `complete=false` as
+    incomplete coverage, never as “no new papers,” and disclose `bounded=true`.
+    Deeply interpret at most three new papers only when identity, direct
+    relevance, retraction state, and readable full text all pass. Include sourced
+    manuscript-history dates and verified direct links; never pad the count.
+
+To receive a “nothing new today” message, replace the quiet rule with “send a
+short heartbeat even when there is no change.” Creating a recurring task mutates
+external state and requires confirmation. The complete execution contract is in
+`references/daily-monitoring.md`.
 
 For a supplied PDF, RIS, BibTeX, JSON, or TXT file, replace the identifier list
 with the attachment or its local path. Follow-up requests can reuse the same
@@ -912,24 +958,172 @@ rejected/pending state to a stronger state produce deduplicated events. Works
 that were ever accepted or pending remain in the lifecycle queue after a later
 rejection; the oldest checked OpenAlex records rotate first.
 
-## Running it on a schedule
+## Creating an actual daily task
 
-LitWatch does not install schedules or send notifications. After a successful
-manual baseline, call the watch command from the scheduler already trusted by
-the user. In this example cron entry, replace all three paths with real paths
-on that machine:
+LitWatch already implements the **incremental watch engine** needed for daily
+tracking: `watch` resumes from the last successful checkpoint, overlaps recent
+dates, deduplicates papers, and refreshes publication/correction/retraction
+state. What it cannot honestly implement inside a terminated model session is
+waking itself up; a host automation or OS scheduler must do that.
 
-    15 8 * * * cd /path/to/litwatch && /absolute/python scripts/litwatch.py watch --workspace /path/to/workspace
+| Runner | Can start daily? | Can deliver a chat digest/deep reading? |
+|---|---:|---:|
+| Tool-capable model/agent with recurring tasks | Yes | Yes, subject to host permissions |
+| Windows Task Scheduler, cron, or launchd | Yes | No; by default it only updates workspace files |
+| Plain chat model or ephemeral session | No | Only after a user starts a session manually |
 
-For Windows Task Scheduler, configure the chosen Python executable as the
-program, use `scripts\litwatch.py watch --workspace "WORKSPACE"` as the
-arguments after replacing `WORKSPACE` with the real path, and use the LitWatch
-directory as the working directory.
+### Complete these checks first
+
+1. Follow steps 1–5 in “Usage mode 2” to initialize the workspace, add real
+   seeds, and save one baseline.
+2. Fix the LitWatch directory, workspace, and actual Python interpreter; do not
+   casually move them afterward.
+3. Run `doctor --network` and `watch --dry-run`. Create the task only after both
+   succeed.
+4. Check the system timezone with `Get-TimeZone` on Windows or `date` on
+   Linux/macOS. Schedulers use the host's local time; writing another timezone
+   in a prompt does not convert the trigger automatically.
+5. Close `accepted_papers.xlsx` so Excel cannot lock it during the run.
+
+### Method A — have a recurring-task agent create it
+
+Append this to the “Automatic daily tracking” prompt and give it to a platform
+that supports both tool use and recurring automation:
+
+    Actually call this platform's recurring-task facility; do not merely explain
+    the steps. Show me the final configuration and wait for my confirmation.
+    After confirmation, create it and return its name or ID, time, timezone,
+    workspace, next run time, notification rule, and one verification result. If
+    recurring tasks are unavailable, say “not created” and give me the correct
+    operating-system procedure.
+
+A plain chat model cannot do this. Creation is verified only when the host
+returns a queryable task ID or record and a next-run time. Choose this method if
+the daily result must arrive in chat with up to three deep readings. An OS
+scheduler by itself cannot send a chat message.
+
+### Method B — create a real task with Windows PowerShell
+
+The following registers a real daily task for the current Windows user. Replace
+every angle-bracketed value with an absolute path and edit the run time; do not
+run the placeholders unchanged. Complete the baseline and checks above, then run
+the block in one PowerShell window:
+
+```powershell
+$TaskName = "LitWatch Daily"
+$PythonExe = "<absolute path to the Python interpreter>"
+$LitWatchDir = "<absolute path to the LitWatch project>"
+$Workspace = "<absolute path to the LitWatch workspace>"
+$RunHour = 8
+$RunMinute = 30
+
+$LitWatchScript = Join-Path $LitWatchDir "scripts\litwatch.py"
+$RequiredPaths = @($PythonExe, $LitWatchDir, $Workspace, $LitWatchScript)
+foreach ($RequiredPath in $RequiredPaths) {
+    if (-not (Test-Path -LiteralPath $RequiredPath)) {
+        throw "Path does not exist: $RequiredPath"
+    }
+}
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    throw "A task already exists with this name: $TaskName. Inspect it or choose another name."
+}
+
+& $PythonExe $LitWatchScript doctor --workspace $Workspace --network
+if ($LASTEXITCODE -ne 0) { throw "doctor preflight failed; task not created." }
+& $PythonExe $LitWatchScript watch --workspace $Workspace --dry-run
+if ($LASTEXITCODE -ne 0) { throw "watch preflight failed or was incomplete; task not created." }
+
+$RunAt = [datetime]::Today.AddHours($RunHour).AddMinutes($RunMinute)
+$TaskArguments = '"{0}" watch --workspace "{1}"' -f $LitWatchScript, $Workspace
+$TaskAction = New-ScheduledTaskAction `
+    -Execute $PythonExe `
+    -Argument $TaskArguments `
+    -WorkingDirectory $LitWatchDir
+$TaskTrigger = New-ScheduledTaskTrigger -Daily -At $RunAt
+$TaskSettings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RunOnlyIfNetworkAvailable `
+    -MultipleInstances IgnoreNew
+$TaskUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $TaskAction `
+    -Trigger $TaskTrigger `
+    -Settings $TaskSettings `
+    -User $TaskUser `
+    -RunLevel Limited `
+    -Description "Run LitWatch incremental literature monitoring every day"
+```
+
+The block refuses to overwrite an existing task. `StartWhenAvailable` allows a
+missed run to start when the machine becomes available, while `IgnoreNew`
+prevents overlap. It runs with the current user's visible network and file
+permissions. To run while that user is signed out, open the task in Windows Task
+Scheduler, select “Run whether user is logged on or not,” provide the requested
+account credentials, and then retest network and environment-variable access.
+
+For Conda, do not point the task directly at the environment's `python.exe`.
+Use `conda.exe` as the program and arguments in this form:
+`run -p "<absolute environment path>" --no-capture-output python "<litwatch.py>" watch --workspace "<workspace>"`.
+First test that exact command in a normal terminal.
+
+### Verify the Windows task
+
+Inspect and manually trigger it once:
+
+```powershell
+Get-ScheduledTask -TaskName $TaskName | Select-Object TaskName, State
+Get-ScheduledTaskInfo -TaskName $TaskName |
+    Select-Object LastRunTime, NextRunTime, LastTaskResult
+Start-ScheduledTask -TaskName $TaskName
+```
+
+After it finishes, run `Get-ScheduledTaskInfo` again and inspect the workspace:
+
+```powershell
+Get-ChildItem -LiteralPath (Join-Path $Workspace "reports") -Filter "20*.json" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 FullName, LastWriteTime
+```
+
+`LastTaskResult` `0` means a complete success; `3` means a report was written
+with incomplete source coverage; any other nonzero value is a failure. Confirm
+that the newest timestamped report came from this test rather than trusting an
+older `latest.json`. To disable or remove the task:
+
+```powershell
+Disable-ScheduledTask -TaskName $TaskName
+Unregister-ScheduledTask -TaskName $TaskName
+```
+
+The removal command asks for confirmation. Do not add `-Confirm:$false` without
+first checking the exact task name.
+
+### Method C — use cron on Linux/macOS
+
+First run the exact Python, script, and workspace manually. Then use
+`crontab -e` and add one line. This example runs every day at 08:15 in the
+host's local time; replace every path with an absolute path:
+
+```cron
+15 8 * * * cd "/absolute/path/to/litwatch" && "/absolute/path/to/python3" scripts/litwatch.py watch --workspace "/absolute/path/to/workspace"
+```
+
+Save, then confirm the entry with `crontab -l`. Cron often does not load an
+interactive shell profile, so API credentials must be available to the cron
+account without being committed to the repository or reports. Cron and Windows
+Task Scheduler update workspace files only; sending results back to chat still
+requires an agent automation with message delivery.
 
 Do not pass a fixed --since on routine scheduled runs; checkpoint plus overlap
-handles missed days. Treat exit code 3 as a coverage warning, not “nothing new”.
-Creating a schedule is a persistent external change and should be done only on
-an explicit user request.
+handles missed days. Exit code 3 means that a report exists with incomplete
+coverage, not “nothing new”; `bounded=true` means a configured cap was reached,
+not that all literature was exhausted. An OS scheduler alone does not send chat
+messages. Automatic delivery and deep reading require an agent automation that
+can invoke LitWatch, read the fresh report, and send the result. Creating a
+persistent schedule requires an explicit user request. See
+`references/daily-monitoring.md` for the full contract and failure handling.
 
 ## Privacy, data, and authorization
 
@@ -995,9 +1189,10 @@ backup. They are not test fixtures.
 
 Version 2 does not include OCR, direct Google Scholar/CNKI/Wanfang scraping,
 direct arXiv/bioRxiv/medRxiv/Semantic Scholar connectors, embeddings, a web UI,
-hosted service, automatic full-text download, message delivery, or scheduler
-installation. It can interpret supplied or lawfully readable full text, but it
-does not acquire inaccessible papers. OpenAlex can still surface many preprints
+hosted service, automatic full-text download, message delivery, or a built-in
+cross-platform one-click scheduler installer. It can interpret supplied or
+lawfully readable full text, but it does not acquire inaccessible papers.
+OpenAlex can still surface many preprints
 and citation relations.
 
 The system assists discovery; it does not guarantee exhaustive systematic

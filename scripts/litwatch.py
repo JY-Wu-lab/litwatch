@@ -35,7 +35,7 @@ from typing import Any, Iterable
 from xml.sax.saxutils import escape as xml_escape, quoteattr
 
 
-VERSION = "2.3.6"
+VERSION = "2.3.7"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
 MAX_TEXT_SEED_BYTES = 20 * 1024 * 1024

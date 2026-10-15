@@ -59,11 +59,14 @@ only after the paper identity and destination are checked.
 
 ## Scheduling
 
-LitWatch itself does not install schedules or send messages. A user can call the
-watch command from cron, Task Scheduler, or an agent automation. Creating that
-persistent external automation requires a separate explicit request. Preserve
-exit semantics: 0 complete, 3 report produced with incomplete enabled-source
-coverage, 2 configuration/input error.
+LitWatch implements the checkpointed incremental `watch`, not a resident timer.
+A user can invoke it from cron, Task Scheduler, or a host-native agent
+automation. Only the last option can also interpret a fresh report and deliver a
+chat response without a separate notification integration. Creating a persistent
+external automation requires a separate explicit request. Preserve exit
+semantics: 0 complete, 3 report produced with incomplete enabled-source coverage,
+2 configuration/input error. Read [daily-monitoring.md](daily-monitoring.md)
+before creating or operating a recurring watch.
 
 ## Publishing and licenses
 

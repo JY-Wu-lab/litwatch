@@ -8,10 +8,11 @@
 的论文，去掉重复项，并说明每篇论文为什么入选或被排除。以后再次运行时，它会记住
 已经找到的内容，只报告新增结果。需要时，大模型还可以在当前对话中精读最多 3 篇
 确实相关且能读到全文的论文；不足 3 篇就少报，不会凑数。每次正式保存检索结果时，
-还会自动维护一份累计的 Excel 入选论文表。
+还会自动维护一份累计的 Excel 入选论文表。需要每天追踪时，由宿主大模型的自动化功能
+或操作系统计划任务每天触发一次增量 `watch`；Skill 本身不会在会话结束后常驻。
 
 检索关键词：paper search、相关论文、文献检索、引用滚雪球、论文精读、文献解读、
-批判性评价、科研监测、预印本追踪、JCR 分区、中科院分区。
+批判性评价、科研监测、每天追踪文献、每日文献监测、预印本追踪、JCR 分区、中科院分区。
 
 > 第一次使用只需阅读“3 分钟上手”“种子文件和期刊指标文件放在哪里”和
 > “使用方式一：直接告诉大模型”。其余内容是遇到问题时再查的参考手册。
@@ -36,6 +37,10 @@
 或历史中科院分区时，才需要导入自己有权使用的对应版本 CSV；没有表时不要让模型猜，
 也不要把 OpenAlex 指标冒充 JIF。具体取得方式和“无表”提示词见“怎样使用 JCR、中科院
 分区和影响因子”。
+
+想每天自动追踪时，先完成并保存一次基线检索，再告诉模型每天几点、所在时区、工作目录，
+以及“无新增时保持安静”还是“每天也要报平安”。可直接复制的提示词见“每天自动追踪”；
+从基线、实际创建到验证任务的完整步骤见“如何实际创建每日任务”。
 
 ### 常见词语，用普通话解释
 
@@ -182,6 +187,7 @@ workspace：
     ├── references/
     │   ├── configuration.md
     │   ├── sources-and-ranking.md
+    │   ├── daily-monitoring.md
     │   ├── interpretation.md
     │   ├── output-schema.md
     │   └── compatibility-and-security.md
@@ -239,7 +245,7 @@ Skill 的发现路径和调用语法由宿主决定，也可能更新，应以�
 | 公开期刊指标标注 | 是 | OpenAlex 2-year mean citedness；绝不标成 JIF |
 | 在对话中详细解读 | 可读取全文时可以 | 宿主具备文档/网页读取能力，且全文可合法访问 |
 | JCR 分区/JIF 或中科院分区标注与筛选 | 否 | 每个 workspace 首次使用时导入本地合法授权的 CSV |
-| 定时监测 | 取决于宿主 | 由宿主定时器或其它调度器重复执行 `watch` |
+| 每日自动监测 | 追踪引擎可以，自动唤醒取决于宿主 | LitWatch 提供增量 `watch`；宿主定时器或操作系统调度器负责每天触发 |
 
 因此，新用户没有 JCR/CAS 表也能立即检索。用户要求 JCR、JIF 或中科院分区筛选时，
 不能偷换成 OpenAlex 指标，也不能猜测分区；必须先导入有权使用的数据，否则明确标为
@@ -317,7 +323,7 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
 
 大模型识别到 Skill 后，可以使用 `$litwatch`，也可以直接说“使用 LitWatch”。告诉它
 工作目录、作为样本的论文、年份或期刊要求，以及你想首次检索、继续查找新增论文，还是
-详细解读。
+每天自动追踪或详细解读。
 
 ### 首次检索并精读
 
@@ -356,6 +362,32 @@ LitWatch **不会自动扫描**这些目录。仅把文件复制进去不会生�
     使用 $litwatch 和已有工作目录 <你的工作目录>，从上次成功检索的位置继续。
     只报告新增论文，以及见刊、更正或撤稿等重要变化，然后在当前对话中解读最多
     3 篇新近符合条件的论文。
+
+### 每天自动追踪
+
+每天追踪不是把聊天窗口一直开着，而是让一个外部定时器每天调用同一 workspace 的
+`watch`。支持定时自动化且能运行工具的大模型，可以完成检索、读取本次新报告并发回
+摘要；Windows 任务计划或 cron 只能运行 CLI 和更新本地报告，除非另外接入通知工具。
+
+先替换时间、时区和工作目录，再把下面内容交给具备工具能力的大模型：
+
+    使用 $litwatch，为已有工作目录 <你的工作目录> 建立每日文献监测。每天在
+    <本地时间，例如 08:30>、<时区，例如 Asia/Shanghai> 运行。先确认已经完成一次
+    成功的保存型基线检索；运行 `doctor --network` 和一次 `watch --dry-run` 预检。
+
+    如果宿主支持周期自动化，先向我展示任务名称、时间、时区、workspace、通知规则和
+    实际命令；等我明确确认后，实际调用平台的周期任务功能创建任务。创建成功后返回
+    任务 ID、下一次运行时间和验证结果。否则给出适用于当前操作系统的计划任务配置，
+    并明确说明未创建，不要只打印提示词就声称已经启用。每日任务只运行一次非 dry-run 的 `watch`，
+    不固定传 `--since`，并读取本次命令返回的新报告路径。发现新入选论文、见刊、更正、
+    关注声明、撤稿或运行失败时通知我；没有有意义变化时保持安静。若 `complete=false`
+    或退出码为 3，必须报告覆盖不完整，不能说“没有新论文”；`bounded=true` 时说明达到
+    了配置上限。只对满足身份、直接相关性、无撤稿状态和可读全文门槛的新增论文精读
+    最多 3 篇，宁缺毋滥，并附日期来源和直达链接。
+
+如果你希望每天都收到“今天没有新增”的消息，把“没有有意义变化时保持安静”改成
+“即使没有新增也每天发送一次简短状态”。真正创建周期任务会改变外部系统状态，模型
+应在创建前确认；完整执行协议见 `references/daily-monitoring.md`。
 
 如果种子是 PDF、RIS、BibTeX、JSON 或 TXT，把标识符列表换成附件或本地路径即可。
 后续可以继续使用同一 workspace，例如：“解释论文 X 为什么是 pending”“比较论文
@@ -801,20 +833,152 @@ watch 对新论文只报告一次。普通预印本元数据更新静默写入�
 的记录即使后来被拒绝，也继续参与生命周期复查；拥有 OpenAlex ID 的记录按最久未检查
 优先轮转。
 
-## 如何定期自动运行
+## 如何实际创建每日任务
 
-LitWatch 不自动安装计划任务，也不负责发消息。完成一次人工基线后，可让用户已经信任
-的调度器调用 watch。例如 cron；其中三个路径都必须替换成当前机器上的真实路径：
+LitWatch 已经实现每天所需的**增量追踪引擎**：`watch` 会从上次成功检查点继续、回看
+少量重叠日期、合并重复论文并复查见刊/更正/撤稿。它没有实现也不应该伪装实现的是
+“会话结束后自己醒来”；这必须交给宿主自动化或操作系统调度器。
 
-    15 8 * * * cd /path/to/litwatch && /absolute/python scripts/litwatch.py watch --workspace /path/to/workspace
+| 运行方式 | 能每天启动 | 能在对话中汇报/精读 |
+|---|---:|---:|
+| 支持工具和周期任务的大模型/Agent | 是 | 是，取决于宿主权限 |
+| Windows 任务计划、cron、launchd | 是 | 否；默认只更新 workspace 文件 |
+| 普通聊天模型或临时会话 | 否 | 只能在用户打开会话后手工运行 |
 
-Windows 任务计划程序中，把选定的 Python 解释器作为程序；参数设为
-`scripts\litwatch.py watch --workspace "WORKSPACE"`，并将 `WORKSPACE` 换成实际路径；
-起始目录设为 LitWatch 目录。
+### 创建前先完成这些步骤
+
+1. 按“使用方式二”的第 1—5 步初始化 workspace、加入真实种子并保存一次基线。
+2. 固定 LitWatch 目录、workspace 和实际使用的 Python；后续不要随意移动。
+3. 运行 `doctor --network` 和 `watch --dry-run`，两条命令都成功后再创建任务。
+4. 用 `Get-TimeZone`（Windows）或 `date`（Linux/macOS）核对系统时区。计划任务默认按
+   运行机器的本地时间执行，不会因为提示词里写了另一个时区而自动换算。
+5. 关闭打开的 `accepted_papers.xlsx`，避免 Windows Excel 锁住文件。
+
+### 方法 A：让支持周期任务的 Agent 实际创建
+
+把“每天自动追踪”中的提示词交给支持自动化和工具调用的平台，并补上下面一句：
+
+    请实际调用本平台的周期任务功能，不要只给出操作说明。创建前先展示最终配置并等待
+    我确认；确认后创建任务，并返回任务名称或 ID、时间、时区、workspace、下一次运行
+    时间、通知规则和一次验证结果。如果平台没有周期任务能力，明确说“未创建”，再给我
+    当前操作系统的创建步骤。
+
+普通聊天模型无法完成这一步。只有宿主真正返回任务 ID 或可查询的任务记录，并且能显示
+下一次运行时间，才算创建成功。希望每天在对话中自动收到摘要和最多 3 篇精读时，应选
+这种方式；单独使用操作系统计划任务不会主动发送聊天消息。
+
+### 方法 B：Windows PowerShell 创建真实任务
+
+下面命令会在当前 Windows 用户下注册一个真实的每日任务。先把所有尖括号内容换成绝对
+路径，并修改运行时间；不要原样运行占位符。确保已经完成上述基线和预检，然后在同一个
+PowerShell 窗口执行：
+
+```powershell
+$TaskName = "LitWatch Daily"
+$PythonExe = "<Python 解释器绝对路径>"
+$LitWatchDir = "<LitWatch 项目绝对路径>"
+$Workspace = "<LitWatch 工作目录绝对路径>"
+$RunHour = 8
+$RunMinute = 30
+
+$LitWatchScript = Join-Path $LitWatchDir "scripts\litwatch.py"
+$RequiredPaths = @($PythonExe, $LitWatchDir, $Workspace, $LitWatchScript)
+foreach ($RequiredPath in $RequiredPaths) {
+    if (-not (Test-Path -LiteralPath $RequiredPath)) {
+        throw "路径不存在：$RequiredPath"
+    }
+}
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    throw "同名任务已存在：$TaskName。请先核对旧任务或换一个名称。"
+}
+
+& $PythonExe $LitWatchScript doctor --workspace $Workspace --network
+if ($LASTEXITCODE -ne 0) { throw "doctor 预检失败，未创建任务。" }
+& $PythonExe $LitWatchScript watch --workspace $Workspace --dry-run
+if ($LASTEXITCODE -ne 0) { throw "watch 预检失败或覆盖不完整，未创建任务。" }
+
+$RunAt = [datetime]::Today.AddHours($RunHour).AddMinutes($RunMinute)
+$TaskArguments = '"{0}" watch --workspace "{1}"' -f $LitWatchScript, $Workspace
+$TaskAction = New-ScheduledTaskAction `
+    -Execute $PythonExe `
+    -Argument $TaskArguments `
+    -WorkingDirectory $LitWatchDir
+$TaskTrigger = New-ScheduledTaskTrigger -Daily -At $RunAt
+$TaskSettings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RunOnlyIfNetworkAvailable `
+    -MultipleInstances IgnoreNew
+$TaskUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $TaskAction `
+    -Trigger $TaskTrigger `
+    -Settings $TaskSettings `
+    -User $TaskUser `
+    -RunLevel Limited `
+    -Description "Run LitWatch incremental literature monitoring every day"
+```
+
+这段命令不会覆盖同名任务；如果已存在，会先停止并要求人工核对。`StartWhenAvailable`
+表示电脑错过时间后可在恢复可用时补跑，`IgnoreNew` 防止上一次尚未结束时重复启动。
+任务使用当前用户和其可见的网络、文件权限。若希望退出登录后仍运行，请在 Windows
+“任务计划程序”里打开任务属性，选择“无论用户是否登录都要运行”，并按系统提示提供
+该账户凭据；随后必须重新测试网络和环境变量权限。
+
+如果实际环境是 Conda，不要直接把环境里的 `python.exe` 填进 `$PythonExe`。任务的
+程序应使用 `conda.exe`，参数采用
+`run -p "<环境绝对路径>" --no-capture-output python "<litwatch.py>" watch --workspace "<workspace>"`，
+并先在普通终端中用完全相同的命令测试成功。
+
+### 验证 Windows 任务确实可用
+
+创建后立即查看并手工触发一次：
+
+```powershell
+Get-ScheduledTask -TaskName $TaskName | Select-Object TaskName, State
+Get-ScheduledTaskInfo -TaskName $TaskName |
+    Select-Object LastRunTime, NextRunTime, LastTaskResult
+Start-ScheduledTask -TaskName $TaskName
+```
+
+等待运行结束后再次执行 `Get-ScheduledTaskInfo`，并检查 workspace：
+
+```powershell
+Get-ChildItem -LiteralPath (Join-Path $Workspace "reports") -Filter "20*.json" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1 FullName, LastWriteTime
+```
+
+`LastTaskResult` 为 `0` 才是完整成功；`3` 表示已经写出报告但来源覆盖不完整，其他非零值
+表示失败。还应确认最新时间戳报告确实来自刚才的测试，不能只看到旧的 `latest.json`。
+需要临时停用或彻底删除时分别使用：
+
+```powershell
+Disable-ScheduledTask -TaskName $TaskName
+Unregister-ScheduledTask -TaskName $TaskName
+```
+
+删除命令会要求确认。不要在未核对任务名称时使用 `-Confirm:$false`。
+
+### 方法 C：Linux/macOS 使用 cron
+
+先在终端手工运行完全相同的 Python、脚本和 workspace，确认成功，然后执行
+`crontab -e` 添加一行。下面表示每天本机时间 08:15 运行；所有路径都要替换成绝对路径：
+
+```cron
+15 8 * * * cd "/absolute/path/to/litwatch" && "/absolute/path/to/python3" scripts/litwatch.py watch --workspace "/absolute/path/to/workspace"
+```
+
+保存后用 `crontab -l` 确认任务存在。cron 通常不会读取交互式终端配置；API 密钥等环境
+变量必须对 cron 账户可用，但不能直接写进公开仓库或报告。cron 和 Windows 任务计划都
+只更新 workspace 文件；要把结果发回对话，还需要支持消息投递的 Agent 自动化。
 
 常规定时运行不要固定传 --since；checkpoint 与重叠窗口会处理漏跑。退出码 3 表示
-覆盖不完整，不是“今天无新文献”。创建外部持久计划属于另一项操作，必须由用户明确
-要求。
+已经生成报告但覆盖不完整，不是“今天无新文献”；`bounded=true` 表示达到人为上限，
+也不等于穷尽全部文献。操作系统调度器本身不会发聊天消息；要自动汇报和精读，必须由
+能调用 LitWatch、读取本次新报告并发送结果的 Agent 自动化来运行。创建外部持久任务
+必须由用户明确要求。完整协议和失败处理见 `references/daily-monitoring.md`。
 
 ## 隐私、数据和授权
 
@@ -870,8 +1034,8 @@ OCR 暂不支持。
 ## 更完整的能力边界
 
 v2 不包含 OCR、Google Scholar/CNKI/万方抓取、arXiv/bioRxiv/medRxiv/Semantic
-Scholar 直连、embedding、Web UI、托管服务、全文自动下载、消息推送或自动安装计划
-任务。它可以解读用户提供或依法可读取的全文，但不会获取无法访问的论文。OpenAlex
+Scholar 直连、embedding、Web UI、托管服务、全文自动下载、消息推送或跨平台内置的一键
+计划任务安装器。它可以解读用户提供或依法可读取的全文，但不会获取无法访问的论文。OpenAlex
 仍能覆盖大量预印本和引用关系。
 
 本工具辅助发现，不保证系统综述的穷尽性，也不保证临床/法律证据等级或供应商元数据
