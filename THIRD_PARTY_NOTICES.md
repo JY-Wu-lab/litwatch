@@ -12,6 +12,11 @@ included. The local importer stores normalized rows in the user's workspace
 only; it does not grant a license to obtain, copy, publish, or redistribute the
 source data.
 
+Clarivate's published JCR usage guidance states that wholesale sharing outside
+a subscriber's institution is prohibited and that some publication uses require
+permission:
+https://clarivate.com/academia-government/blog/a-quick-refresher-on-journal-citation-reports-use-cases-branding-and-terms-of-use/
+
 Compatibility with the common ShowJCR-style CSV layout is parser behavior only.
 The ShowJCR code license does not by itself grant rights to redistribute the
 underlying Clarivate JCR or CAS partition datasets.

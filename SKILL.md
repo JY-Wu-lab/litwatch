@@ -3,7 +3,7 @@ name: litwatch
 description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: MIT
 metadata:
-  version: "2.3.2"
+  version: "2.3.3"
   schema-version: "1"
 ---
 
@@ -30,6 +30,13 @@ with its absolute path.
 
        python scripts/litwatch.py seed add --workspace WORKSPACE INPUT...
 
+   Seeds are representative papers, not journal names. Journal allowability,
+   quartiles, impact factor, and partitions belong to journal-metric filters.
+   Seed files may be attached directly or stored anywhere the host can read;
+   prefer `WORKSPACE/inputs/` for reusable files. LitWatch never auto-scans that
+   directory: pass every identifier or file path explicitly to `seed add`, then
+   verify the result with `seed list`.
+
    For local/private JSON metadata, or whenever no network access is intended,
    pass `--offline` explicitly:
 
@@ -44,6 +51,8 @@ with its absolute path.
 
    If the user requests JCR, CAS, or JIF screening, first run `metrics status`.
    Import an authorized local edition when needed and select its year. For a
+   reusable layout, keep those files under `WORKSPACE/local-metrics/`, but do not
+   assume placement imports them: run `metrics import` explicitly. For a
    strict venue rule, use `hard_filter=true` and `missing=exclude_strict`; if
    the requested edition is absent, report that gap instead of guessing a
    partition. Multiple active metric criteria combine with AND.

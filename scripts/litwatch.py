@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
 MAX_TEXT_SEED_BYTES = 20 * 1024 * 1024
