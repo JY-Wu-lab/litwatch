@@ -1,0 +1,869 @@
+from __future__ import annotations
+
+import argparse
+import io
+import importlib.util
+import json
+import os
+import sqlite3
+import tempfile
+import unittest
+from copy import deepcopy
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+import xml.etree.ElementTree as ET
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "litwatch.py"
+SPEC = importlib.util.spec_from_file_location("litwatch_module", SCRIPT)
+assert SPEC and SPEC.loader
+lw = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(lw)
+
+
+def work(**overrides):
+    value = {
+        "title": "Histology image prediction of gene expression",
+        "abstract": "A neural model predicts spatial gene expression from pathology images.",
+        "authors": ["Ada Example"],
+        "year": 2025,
+        "publication_date": "2025-01-02",
+        "doi": "10.1234/example",
+        "pmid": "",
+        "arxiv_id": "",
+        "openalex_id": "W123",
+        "type": "article",
+        "is_preprint": False,
+        "is_retracted": False,
+        "journal": "Journal of Synthetic Results",
+        "source_id": "S1",
+        "issn_l": "12345678",
+        "issns": ["12345678"],
+        "cited_by_count": 5,
+        "is_oa": True,
+        "oa_status": "gold",
+        "licenses": ["cc-by"],
+        "topics": ["Computational pathology"],
+        "relation_flags": [],
+        "metadata_sources": ["fixture"],
+    }
+    value.update(overrides)
+    return value
+
+
+def result(record=None, status="accepted", score=50.0):
+    return {
+        "work": record or work(),
+        "score": score,
+        "score_breakdown": {"seed_similarity": score},
+        "status": status,
+        "reasons": ["fixture"],
+        "provenance": [{"source": "fixture", "channel": "related", "rank": 1}],
+    }
+
+
+class HelpersTest(unittest.TestCase):
+    def test_identifier_normalization(self):
+        self.assertEqual(lw.normalize_doi("https://doi.org/10.1000/ABC.1)."), "10.1000/abc.1")
+        self.assertEqual(lw.normalize_doi("10.1000/example(1)"), "10.1000/example(1)")
+        self.assertEqual(lw.normalize_doi("NA"), "")
+        self.assertEqual(lw.parse_identifier("PMID: 12345")["pmid"], "12345")
+        self.assertEqual(lw.parse_identifier("29456894")["pmid"], "29456894")
+        self.assertEqual(lw.parse_identifier("https://api.openalex.org/works/W42/")["openalex_id"], "W42")
+        self.assertEqual(lw.parse_identifier("https://arxiv.org/abs/2401.01234v2")["arxiv_id"], "2401.01234")
+        self.assertEqual(lw.parse_identifier("2401.01234v3")["arxiv_id"], "2401.01234")
+        self.assertEqual(lw.parse_identifier("hep-th/9901001")["arxiv_id"], "hep-th/9901001")
+
+    def test_unicode_tokenization(self):
+        tokens = lw.tokenize("空间转录组预测 and Histology-based model")
+        self.assertIn("histology-based", tokens)
+        self.assertIn("空间", tokens)
+
+    def test_bibtex_and_ris(self):
+        bib = '@article{x, title={A {Nested} Title}, doi={10.1000/X}, year={2024}, author={A One and B Two}}'
+        parsed = lw.parse_bibtex(bib)[0]
+        self.assertEqual(parsed["doi"], "10.1000/x")
+        self.assertEqual(parsed["year"], 2024)
+        ris = "TY  - JOUR\nTI  - Example title\nDO  - 10.1000/Y\nAU  - Example, A\nER  -\n"
+        self.assertEqual(lw.parse_ris(ris)[0]["doi"], "10.1000/y")
+
+    def test_seed_input_validation_handles_long_titles_and_bad_shapes(self):
+        title = "A" * 400
+        self.assertEqual(lw.parse_seed_input(title)[0]["title"], title)
+        with self.assertRaises(lw.LitWatchError):
+            lw.normalize_seed_record({"title": "T", "authors": "not-a-list"}, "fixture")
+
+    def test_seed_dates_identifiers_and_input_sizes_are_bounded(self):
+        record = lw.normalize_seed_record({
+            "title": "Validated seed",
+            "publication_date": "2024-02",
+            "received_date": "2023",
+            "accepted_date": "2024-02-29",
+            "revised_dates": ["2024-01", "2024-02-01"],
+            "pmid": 123,
+            "arxiv_id": "https://arxiv.org/abs/2401.01234v2",
+            "openalex_id": "https://openalex.org/W42",
+        }, "fixture")
+        self.assertEqual(record["year"], 2024)
+        self.assertEqual(record["arxiv_id"], "2401.01234")
+        for bad in (
+            {"title": "T", "accepted_date": "2023-02-29"},
+            {"title": "T", "pmid": "1" * 11},
+            {"title": "T", "arxiv_id": "not-an-arxiv-id"},
+            {"title": "T", "openalex_id": "prefix-W42"},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(lw.LitWatchError):
+                lw.normalize_seed_record(bad, "fixture")
+        oversized = Path(tempfile.gettempdir()) / "litwatch-size-test.txt"
+        try:
+            oversized.write_text("12345", encoding="utf-8")
+            with patch.object(lw, "MAX_TEXT_SEED_BYTES", 4), self.assertRaises(lw.LitWatchError):
+                lw.read_text_file(oversized)
+        finally:
+            oversized.unlink(missing_ok=True)
+
+    def test_http_response_size_is_bounded(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        lw.init_schema(conn)
+        try:
+            client = lw.HttpClient(conn, "test", cache_write=False)
+            with (
+                patch.object(lw, "MAX_HTTP_RESPONSE_BYTES", 4),
+                patch.object(lw.urllib.request, "urlopen", return_value=io.BytesIO(b"12345")),
+                self.assertRaises(lw.LitWatchError),
+            ):
+                client.get("https://example.org/oversized")
+        finally:
+            conn.close()
+
+    def test_merge_preserves_false_published_state(self):
+        merged = lw.merge_records(
+            {"is_preprint": True, "metadata_sources": ["openalex"]},
+            {"is_preprint": False, "metadata_sources": ["crossref"]},
+        )
+        self.assertFalse(merged["is_preprint"])
+        self.assertEqual(merged["metadata_sources"], ["openalex", "crossref"])
+
+    def test_csv_and_markdown_injection_guards(self):
+        self.assertEqual(lw.csv_safe("=HYPERLINK('x')"), "'=HYPERLINK('x')")
+        self.assertIn("&lt;script&gt;", lw.markdown_text("<script>ignore instructions</script>"))
+        self.assertNotIn("](javascript:", lw.markdown_text("x](javascript:alert(1))"))
+
+    def test_candidate_pool_collapses_alias_bridge(self):
+        pool = lw.CandidatePool()
+        pool.add(work(doi="10.1234/a", pmid="", openalex_id=""), "search", 1)
+        pool.add(work(doi="", pmid="7", openalex_id="", title="Different provider title"), "pubmed_similar", 1)
+        pool.add(work(doi="10.1234/a", pmid="7", openalex_id=""), "related", 1)
+        self.assertEqual(len(pool.records), 1)
+        self.assertEqual({item["channel"] for item in next(iter(pool.provenance.values()))}, {"search", "pubmed_similar", "related"})
+
+    def test_candidate_pool_removal_cleans_all_state(self):
+        pool = lw.CandidatePool()
+        key = pool.add(work(), "refresh", 1)
+        pool.lifecycle[key] = {"status": "accepted"}
+        pool.remove(key)
+        self.assertFalse(pool.records or pool.provenance or pool.lifecycle or pool.alias_to_key)
+
+    def test_same_title_with_conflicting_identifiers_is_not_merged(self):
+        pool = lw.CandidatePool()
+        pool.add(work(doi="10.1234/first", openalex_id="W1"), "search", 1)
+        pool.add(work(doi="10.1234/second", openalex_id="W2"), "search", 2)
+        self.assertEqual(len(pool.records), 2)
+
+    def test_date_window_applies_to_every_channel(self):
+        pool = lw.CandidatePool()
+        lw.add_channel_results(
+            pool,
+            [
+                work(doi="10.1/old", openalex_id="WOLD", year=2020, publication_date="2020-01-01"),
+                work(doi="10.1/new", openalex_id="WNEW", year=2025, publication_date="2025-03-01"),
+            ],
+            "related",
+            "seed",
+            "openalex",
+            lw.date(2025, 1, 1),
+            lw.date(2025, 12, 31),
+        )
+        self.assertEqual({record["doi"] for record in pool.records.values()}, {"10.1/new"})
+
+    def test_openalex_abstract_reconstruction(self):
+        parsed = lw.parse_openalex_work({
+            "id": "https://openalex.org/W1",
+            "display_name": "T",
+            "abstract_inverted_index": {"hello": [0], "world": [1]},
+            "ids": {},
+            "primary_location": {"landing_page_url": "https://publisher.example/paper"},
+            "best_oa_location": {
+                "landing_page_url": "https://repository.example/item",
+                "pdf_url": "https://repository.example/paper.pdf",
+            },
+        })
+        self.assertEqual(parsed["abstract"], "hello world")
+        self.assertIsNone(parsed["is_oa"])
+        self.assertEqual(parsed["primary_url"], "https://publisher.example/paper")
+        self.assertEqual(parsed["oa_pdf_url"], "https://repository.example/paper.pdf")
+        self.assertEqual(lw.normalize_document_type("journal-article"), "article")
+
+    def test_partial_crossref_dates_and_safe_direct_links(self):
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[2024]]}), "2024")
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[2024, 2]]}), "2024-02")
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[2024, 2, 29]]}), "2024-02-29")
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[2023, 2, 29]]}), "")
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[2024, 1, 1, 12]]}), "")
+        self.assertEqual(lw.parse_crossref_partial_date({"date-parts": [[True]]}), "")
+        self.assertEqual(lw.safe_https_url("https://user:secret@example.org/paper"), "")
+
+        record = lw.report_record(result(work(
+            received_date="2024-01-03",
+            revised_dates=["2024-02-01", "2024-02-20"],
+            accepted_date="2024-03",
+            publisher_url="javascript:alert(1)",
+            primary_url="http://insecure.example/paper",
+            oa_url="https://repository.example/item",
+            oa_pdf_url="https://repository.example/paper.pdf",
+            pmid="123",
+            arxiv_id="2401.01234",
+        )))
+        self.assertEqual(record["publication_history"]["accepted"], "2024-03")
+        self.assertEqual(record["links"]["publisher"], "")
+        self.assertEqual(record["links"]["primary"], "")
+        self.assertEqual(record["links"]["pdf"], "https://repository.example/paper.pdf")
+        self.assertEqual(
+            lw.report_record(result(work(oa_url="javascript:alert(1)")))["open_access"]["url"],
+            "",
+        )
+        markdown = lw.render_markdown(lw.dry_run_report(
+            "discover", [result(record=work(
+                received_date="2024-01-03",
+                accepted_date="2024-03",
+                oa_pdf_url="https://repository.example/paper.pdf",
+            ))], {"complete": True, "bounded": False, "warnings": [], "channels": []},
+        ))
+        self.assertIn("received 2024\\-01\\-03", markdown)
+        self.assertIn("accepted 2024\\-03", markdown)
+        self.assertIn("[PDF](<https://repository.example/paper.pdf>)", markdown)
+
+    def test_openalex_uses_current_id_filter_and_arxiv_doi(self):
+        class CaptureHttp:
+            def __init__(self):
+                self.urls = []
+
+            def get_json(self, url, **kwargs):
+                self.urls.append(url)
+                if "/works/doi:" in url:
+                    return {
+                        "id": "https://openalex.org/W9",
+                        "display_name": "arXiv work",
+                        "doi": "https://doi.org/10.48550/arxiv.2401.01234",
+                        "ids": {},
+                        "primary_location": {},
+                    }
+                if "/sources?" in url:
+                    return {"results": [{"id": "https://openalex.org/S1", "summary_stats": {}}]}
+                return {
+                    "results": [{"id": "https://openalex.org/W1", "display_name": "T", "ids": {}, "primary_location": {}}],
+                    "meta": {"count": 1, "next_cursor": None},
+                }
+
+        http = CaptureHttp()
+        client = lw.OpenAlexClient(http, {})
+        resolved = client.resolve({"arxiv_id": "2401.01234"})
+        self.assertEqual(resolved["arxiv_id"], "2401.01234")
+        client.fetch_ids(["W1", "W2"], 2)
+        client.source_metrics(["S1"])
+        parsed = [parse_qs(urlparse(url).query) for url in http.urls if "?" in url]
+        self.assertTrue(any(values.get("filter") == ["openalex:W1|W2"] and "per_page" in values for values in parsed))
+        self.assertTrue(any(values.get("filter") == ["openalex:S1"] and "per_page" in values for values in parsed))
+        self.assertTrue(any("/works/doi:10.48550/arxiv.2401.01234" in url for url in http.urls))
+
+    def test_truncated_title_resolution_is_not_treated_as_unique(self):
+        client = object.__new__(lw.OpenAlexClient)
+        client.list_works = lambda params, limit: ([work(title="Shared title")], True, 20)
+        self.assertIsNone(client.resolve({"title": "Shared title"}))
+
+    def test_markdown_marks_preprints(self):
+        source = {"complete": True, "bounded": False, "warnings": [], "channels": []}
+        report = lw.dry_run_report(
+            "discover",
+            [result(work(type="preprint", is_preprint=True))],
+            source,
+        )
+        self.assertIn("preprint — not peer reviewed", lw.render_markdown(report))
+
+    def test_crossref_not_found_is_missing_metadata_not_source_failure(self):
+        class MissingHttp:
+            def get_json(self, *args, **kwargs):
+                raise lw.NotFoundError("not found")
+
+        client = lw.CrossrefClient(MissingHttp(), {"email_env": "CROSSREF_EMAIL"})
+        original = work(doi="10.9999/not-registered")
+        self.assertEqual(client.enrich(original), original)
+
+    def test_crossref_distinguishes_retracted_work_from_notice(self):
+        class StaticHttp:
+            def __init__(self, message):
+                self.message = message
+
+            def get_json(self, *args, **kwargs):
+                return {"message": self.message}
+
+        original_message = {
+            "title": ["Original article"],
+            "type": "journal-article",
+            "published-online": {"date-parts": [[2021, 5, 2]]},
+            "published-print": {"date-parts": [[2022, 1, 1]]},
+            "accepted": {"date-parts": [[2021, 4]]},
+            "posted": {"date-parts": [[2021]]},
+            "URL": "https://publisher.example/article",
+            "updated-by": [{"type": "retraction", "DOI": "10.1234/notice", "label": "Retraction"}],
+            "relation": {"is-preprint-of": [{"id-type": "doi", "id": "10.1234/final", "asserted-by": "subject"}]},
+        }
+        original = lw.CrossrefClient(StaticHttp(original_message), {}).enrich(
+            work(doi="10.1234/original", publication_date="2020-12-31")
+        )
+        self.assertTrue(original["is_retracted"])
+        self.assertFalse(original["is_update_notice"])
+        self.assertEqual(original["publication_date"], "2020-12-31")
+        self.assertEqual(original["accepted_date"], "2021-04")
+        self.assertEqual(original["published_online_date"], "2021-05-02")
+        self.assertEqual(original["posted_date"], "2021")
+        self.assertEqual(original["publisher_url"], "https://publisher.example/article")
+        self.assertIn("10.1234/final", {item["id"] for item in original["relations"]})
+
+        notice_message = {
+            "title": ["Retraction: Original article"],
+            "type": "journal-article",
+            "update-to": [{"type": "retraction", "DOI": "10.1234/original", "label": "Retraction"}],
+        }
+        notice = lw.CrossrefClient(StaticHttp(notice_message), {}).enrich(work(doi="10.1234/notice"))
+        self.assertFalse(notice["is_retracted"])
+        self.assertTrue(notice["is_update_notice"])
+        self.assertEqual(notice["relations"][0]["id"], "10.1234/original")
+
+        clinical = lw.CrossrefClient(StaticHttp({
+            "title": ["Retraction of the upper eyelid after surgery"],
+            "type": "journal-article",
+        }), {}).enrich(work(doi="10.1234/clinical"))
+        self.assertNotIn("retraction", clinical["relation_flags"])
+
+    def test_pubmed_dates_issns_oa_and_neighbor_scores(self):
+        xml = ET.fromstring(
+            """<PubmedArticle><MedlineCitation><PMID>7</PMID><Article>
+            <Journal><ISSN>1234-5678</ISSN><Title>Journal</Title><JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue></Journal>
+            <ArticleTitle>Example</ArticleTitle><ArticleDate><Year>2024</Year><Month>09</Month><Day>03</Day></ArticleDate>
+            <PublicationTypeList><PublicationType>Journal Article</PublicationType></PublicationTypeList>
+            </Article><MedlineJournalInfo><ISSNLinking>8765-4321</ISSNLinking></MedlineJournalInfo></MedlineCitation>
+            <PubmedData><History>
+            <PubMedPubDate PubStatus="received"><Year>2024</Year><Month>01</Month><Day>02</Day></PubMedPubDate>
+            <PubMedPubDate PubStatus="revised"><Year>2024</Year><Month>02</Month><Day>03</Day></PubMedPubDate>
+            <PubMedPubDate PubStatus="accepted"><Year>2024</Year><Month>03</Month><Day>04</Day></PubMedPubDate>
+            <PubMedPubDate PubStatus="epublish"><Year>2024</Year><Month>09</Month><Day>03</Day></PubMedPubDate>
+            </History><ArticleIdList><ArticleId IdType="doi">10.1234/PUBMED</ArticleId></ArticleIdList></PubmedData></PubmedArticle>"""
+        )
+        client = object.__new__(lw.PubMedClient)
+        parsed = client._parse_article(xml)
+        self.assertEqual(parsed["publication_date"], "2024-09-03")
+        self.assertEqual(parsed["issn_l"], "87654321")
+        self.assertEqual(set(parsed["issns"]), {"12345678", "87654321"})
+        self.assertIsNone(parsed["is_oa"])
+        self.assertEqual(parsed["received_date"], "2024-01-02")
+        self.assertEqual(parsed["revised_dates"], ["2024-02-03"])
+        self.assertEqual(parsed["accepted_date"], "2024-03-04")
+        self.assertEqual(parsed["published_online_date"], "2024-09-03")
+
+        year_only = ET.fromstring(
+            "<PubmedArticle><MedlineCitation><PMID>8</PMID><Article><Journal><JournalIssue><PubDate><Year>2023</Year></PubDate></JournalIssue></Journal><ArticleTitle>Y</ArticleTitle></Article></MedlineCitation></PubmedArticle>"
+        )
+        parsed_year = client._parse_article(year_only)
+        self.assertEqual(parsed_year["year"], 2023)
+        self.assertEqual(parsed_year["publication_date"], "")
+
+        class LinkHttp:
+            def __init__(self):
+                self.url = ""
+
+            def get(self, url, **kwargs):
+                self.url = url
+                return b"<eLinkResult><LinkSet><LinkSetDb><LinkName>pubmed_pubmed</LinkName><Link><Id>2</Id><Score>1</Score></Link><Link><Id>3</Id><Score>9</Score></Link></LinkSetDb></LinkSet></eLinkResult>"
+
+        link_http = LinkHttp()
+        with patch.dict(os.environ, {"NCBI_EMAIL": "test@example.org"}):
+            link_client = lw.PubMedClient(link_http, {})
+            ids, _ = link_client.similar("1", 10)
+        self.assertEqual(ids, ["3", "2"])
+        self.assertEqual(parse_qs(urlparse(link_http.url).query)["cmd"], ["neighbor_score"])
+
+
+class RankingAndFilterTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = deepcopy(lw.DEFAULT_CONFIG)
+
+    def test_positive_scores_above_negative(self):
+        seed = work(openalex_id="WSEED", doi="10.1/seed")
+        candidate = work(openalex_id="WC", doi="10.1/c")
+        unrelated = work(title="Quantum magnetism in layered crystals", abstract="Spin lattice phase transition", openalex_id="WN")
+        provenance = [{"source": "openalex", "channel": "related", "rank": 1}]
+        good, _ = lw.rank_candidate(candidate, [seed], [], provenance, self.cfg)
+        bad, _ = lw.rank_candidate(unrelated, [seed], [], provenance, self.cfg)
+        penalized, _ = lw.rank_candidate(candidate, [seed], [candidate], provenance, self.cfg)
+        self.assertGreater(good, bad)
+        self.assertLess(penalized, good)
+
+    def test_precision_biased_default_review_bands(self):
+        self.assertEqual(lw.evaluate_filters(work(), 55, self.cfg)[0], "accepted")
+        self.assertEqual(lw.evaluate_filters(work(), 54.999, self.cfg)[0], "pending")
+        self.assertEqual(lw.evaluate_filters(work(), 35, self.cfg)[0], "pending")
+        self.assertEqual(lw.evaluate_filters(work(), 34.999, self.cfg)[0], "rejected")
+
+    def test_missing_metric_goes_pending_when_hard_filter_enabled(self):
+        self.cfg["filters"]["metrics"]["hard_filter"] = True
+        self.cfg["filters"]["metrics"]["jcr"]["quartiles"] = ["Q1"]
+        status, reasons = lw.evaluate_filters(work(journal_metrics={}), 90, self.cfg)
+        self.assertEqual(status, "pending")
+        self.assertTrue(any("missing" in reason for reason in reasons))
+
+    def test_metric_filters_are_and(self):
+        self.cfg["filters"]["metrics"]["hard_filter"] = True
+        self.cfg["filters"]["metrics"]["jcr"]["quartiles"] = ["Q1"]
+        self.cfg["filters"]["metrics"]["cas"]["zones"] = ["1"]
+        record = work(journal_metrics={
+            "jcr": [{"quartile": "Q1", "impact_factor": 10}],
+            "cas": [{"scope": "major", "zone": "2"}],
+        })
+        status, reasons = lw.evaluate_filters(record, 90, self.cfg)
+        self.assertEqual(status, "rejected")
+        self.assertTrue(any("CAS" in reason for reason in reasons))
+
+    def test_metric_conflict_is_pending_and_preprint_is_not_applicable(self):
+        self.cfg["filters"]["metrics"]["hard_filter"] = True
+        self.cfg["filters"]["metrics"]["jcr"]["min_impact_factor"] = 5
+        conflicting = work(journal_metrics={
+            "jcr": [
+                {"category": "A", "impact_factor": 8.0},
+                {"category": "B", "impact_factor": 7.5},
+            ]
+        })
+        status, reasons = lw.evaluate_filters(conflicting, 90, self.cfg)
+        self.assertEqual(status, "pending")
+        self.assertTrue(any("conflict" in reason for reason in reasons))
+
+        self.cfg["filters"]["metrics"]["missing"] = "exclude_strict"
+        status, reasons = lw.evaluate_filters(
+            work(type="preprint", is_preprint=True, journal="", journal_metrics={}),
+            90,
+            self.cfg,
+        )
+        self.assertEqual(status, "accepted")
+        self.assertTrue(any("not applicable" in reason for reason in reasons))
+
+    def test_unknown_open_access_is_pending_not_rejected(self):
+        self.cfg["filters"]["open_access"]["mode"] = "free_to_read"
+        status, reasons = lw.evaluate_filters(work(is_oa=None), 90, self.cfg)
+        self.assertEqual(status, "pending")
+        self.assertTrue(any("unknown" in reason for reason in reasons))
+
+    def test_unknown_metadata_does_not_promote_an_irrelevant_record(self):
+        self.cfg["filters"]["open_access"]["mode"] = "free_to_read"
+        status, reasons = lw.evaluate_filters(work(is_oa=None), 0, self.cfg)
+        self.assertEqual(status, "rejected")
+        self.assertTrue(any("score below" in reason for reason in reasons))
+
+    def test_open_license_uses_exact_normalized_ids(self):
+        self.cfg["filters"]["open_access"] = {"mode": "open_license", "licenses": ["cc-by"]}
+        status, _ = lw.evaluate_filters(work(licenses=["cc-by-nc"]), 90, self.cfg)
+        self.assertEqual(status, "rejected")
+        status, _ = lw.evaluate_filters(
+            work(licenses=["https://creativecommons.org/licenses/by/4.0/"]), 90, self.cfg
+        )
+        self.assertEqual(status, "accepted")
+
+    def test_invalid_publication_date_does_not_crash(self):
+        self.cfg["filters"]["citations"]["minimum"] = 10
+        status, _ = lw.evaluate_filters(work(publication_date="unknown", cited_by_count=0), 90, self.cfg)
+        self.assertEqual(status, "rejected")
+        status, _ = lw.evaluate_filters(
+            work(publication_date="", year=lw.date.today().year, cited_by_count=0), 90, self.cfg
+        )
+        self.assertEqual(status, "accepted")
+
+    def test_document_type_aliases_do_not_change_filter_outcome(self):
+        self.cfg["filters"]["document_types"] = ["journal-article"]
+        status, _ = lw.evaluate_filters(work(type="article"), 90, self.cfg)
+        self.assertEqual(status, "accepted")
+
+    def test_retraction_relation_is_rejected(self):
+        status, reasons = lw.evaluate_filters(work(relation_flags=["is-retracted-by"]), 90, self.cfg)
+        self.assertEqual(status, "rejected")
+        self.assertTrue(any("retract" in reason for reason in reasons))
+
+    def test_unknown_config_key_is_rejected(self):
+        with self.assertRaises(lw.LitWatchError):
+            lw.merge_known(lw.DEFAULT_CONFIG, {"surprise": True})
+        with self.assertRaises(lw.LitWatchError):
+            lw.merge_known(lw.DEFAULT_CONFIG, {"discovery": {"max_candidates": "many"}})
+        invalid = deepcopy(lw.DEFAULT_CONFIG)
+        invalid["filters"]["year_min"] = 2030
+        invalid["filters"]["year_max"] = 2020
+        with self.assertRaises(lw.LitWatchError):
+            lw.validate_config(invalid)
+        with self.assertRaises(lw.LitWatchError):
+            lw.merge_known(lw.DEFAULT_CONFIG, {"sources": {"openalex": {"email_env": "SECRET"}}})
+        invalid = deepcopy(lw.DEFAULT_CONFIG)
+        invalid["filters"]["open_access"]["mode"] = "open_license"
+        with self.assertRaises(lw.LitWatchError):
+            lw.validate_config(invalid)
+        invalid["filters"]["open_access"]["licenses"] = [" "]
+        with self.assertRaises(lw.LitWatchError):
+            lw.validate_config(invalid)
+
+    def test_zero_discovery_limits_are_rejected(self):
+        invalid = deepcopy(lw.DEFAULT_CONFIG)
+        invalid["discovery"]["max_per_channel"] = 0
+        with self.assertRaises(lw.LitWatchError):
+            lw.validate_config(invalid)
+        invalid = deepcopy(lw.DEFAULT_CONFIG)
+        invalid["discovery"]["max_seed_queries"] = 0
+        with self.assertRaises(lw.LitWatchError):
+            lw.validate_config(invalid)
+        disabled = deepcopy(lw.DEFAULT_CONFIG)
+        disabled["discovery"].update({"related": False, "references": False, "citations": False, "search": False, "max_per_channel": 0, "max_candidates": 0})
+        lw.validate_config(disabled)
+
+
+class StateTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.conn = sqlite3.connect(self.root / "state.db")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        lw.init_schema(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.temp.cleanup()
+
+    def test_same_title_different_ids_remain_separate(self):
+        first = work(doi="10.9999/first", openalex_id="W998", pmid="777")
+        second = work(doi="10.9999/later", openalex_id="W999", pmid="778")
+        lw.upsert_result(self.conn, result(first), "2026-01-01T00:00:00Z")
+        lw.upsert_result(self.conn, result(second), "2026-01-02T00:00:00Z")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 2)
+        aliases = {row[0] for row in self.conn.execute("SELECT alias FROM aliases")}
+        self.assertIn("pmid:777", aliases)
+        self.assertIn("doi:10.9999/later", aliases)
+
+    def test_doctor_flags_missing_configured_metric_edition(self):
+        workspace = self.root / "doctor-workspace"
+        workspace.mkdir()
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        cfg["filters"]["metrics"]["hard_filter"] = True
+        cfg["filters"]["metrics"]["missing"] = "exclude_strict"
+        cfg["filters"]["metrics"]["jcr"].update({"year": 2025, "quartiles": ["Q1"]})
+        lw.write_json(workspace / "config.json", cfg)
+        lw.connect_db(workspace, create=True).close()
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            code = lw.command_doctor(argparse.Namespace(workspace=str(workspace), network=False))
+        report = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("jcr 2025", next(check["detail"] for check in report["checks"] if check["name"] == "journal_metrics"))
+
+    def test_preprint_to_published_event(self):
+        preprint = work(doi="10.1/pre", openalex_id="WPRE", is_preprint=True, type="preprint", journal="")
+        published = work(doi="10.1/pre", openalex_id="WPRE", is_preprint=False, type="article")
+        lw.upsert_result(self.conn, result(preprint), "2026-01-01T00:00:00Z")
+        updated = lw.upsert_result(self.conn, result(published), "2026-01-02T00:00:00Z")
+        self.assertIn("published", {event["kind"] for event in updated["events"]})
+
+    def test_correction_event_is_deduplicated(self):
+        base = work()
+        lw.upsert_result(self.conn, result(base), "2026-01-01T00:00:00Z")
+        corrected = work(relation_flags=["correction"])
+        once = lw.upsert_result(self.conn, result(corrected), "2026-01-02T00:00:00Z")
+        twice = lw.upsert_result(self.conn, result(corrected), "2026-01-03T00:00:00Z")
+        self.assertIn("correction", {event["kind"] for event in once["events"]})
+        self.assertNotIn("correction", {event["kind"] for event in twice["events"]})
+
+    def test_failed_search_does_not_advance_checkpoint(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        skipped = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_attempted": False, "search_complete": True}
+        lw.save_run(self.conn, self.root, "discover", [result()], skipped, lw.date(2026, 1, 1), cfg)
+        self.assertIsNone(self.conn.execute("SELECT checkpoint FROM source_state WHERE source='openalex_search'").fetchone())
+        failed = {"complete": False, "bounded": False, "warnings": ["failed"], "channels": [], "search_attempted": True, "search_complete": False}
+        lw.save_run(self.conn, self.root, "discover", [result()], failed, lw.date(2026, 1, 1), cfg)
+        self.assertIsNone(self.conn.execute("SELECT checkpoint FROM source_state WHERE source='openalex_search'").fetchone())
+        complete = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_attempted": True, "search_complete": True}
+        lw.save_run(self.conn, self.root, "discover", [result()], complete, lw.date(2026, 1, 2), cfg)
+        self.assertEqual(self.conn.execute("SELECT checkpoint FROM source_state WHERE source='openalex_search'").fetchone()[0], "2026-01-02")
+
+    def test_search_checkpoint_is_monotonic_and_never_future(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        complete = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_attempted": True, "search_complete": True}
+        today = lw.date.today()
+        newer = today - lw.timedelta(days=2)
+        lw.save_run(self.conn, self.root, "discover", [result()], complete, newer, cfg)
+        lw.save_run(self.conn, self.root, "discover", [result()], complete, newer - lw.timedelta(days=30), cfg)
+        self.assertEqual(lw.current_checkpoint(self.conn, "openalex_search"), newer)
+        lw.save_run(self.conn, self.root, "discover", [result()], complete, today + lw.timedelta(days=30), cfg)
+        self.assertEqual(lw.current_checkpoint(self.conn, "openalex_search"), today)
+
+    def test_pubmed_only_run_without_pmid_is_incomplete(self):
+        seed = work(doi="10.1234/no-pmid", pmid="", openalex_id="")
+        self.conn.execute(
+            "INSERT INTO seeds(seed_key,polarity,input_label,work_json,added_at) VALUES(?,?,?,?,?)",
+            (lw.canonical_work_key(seed), "positive", "fixture", json.dumps(seed), lw.iso_now()),
+        )
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        cfg["sources"]["openalex"]["enabled"] = False
+        cfg["sources"]["crossref"]["enabled"] = False
+        cfg["sources"]["pubmed"]["enabled"] = True
+        _, _, _, status = lw.discover_pool(self.conn, cfg, "discover", None, lw.date.today(), True)
+        self.assertFalse(status["complete"])
+        self.assertTrue(any("no positive seed has a PMID" in warning for warning in status["warnings"]))
+
+    def test_two_runs_do_not_overwrite(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        source = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_complete": True}
+        _, first = lw.save_run(self.conn, self.root, "discover", [result()], source, lw.date(2026, 1, 1), cfg)
+        _, second = lw.save_run(self.conn, self.root, "discover", [result()], source, lw.date(2026, 1, 1), cfg)
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.exists() and second.exists())
+
+    def test_metric_import_preserves_categories(self):
+        self.assertEqual(
+            lw.metric_annotations(self.conn, work(type="preprint", is_preprint=True), deepcopy(lw.DEFAULT_CONFIG))["applicability"],
+            "not_applicable",
+        )
+        source = self.root / "jcr.csv"
+        source.write_text(
+            "Journal,ISSN,Category,Quartile,Impact Factor\n"
+            "Synthetic Journal,1234-5678,A,Q1,8.2\n"
+            "Synthetic Journal,1234-5678,B,Q2,8.2\n"
+            "Synthetic Journal,8765-4321,C,Q4,1.0\n",
+            encoding="utf-8",
+        )
+        summary = lw.import_metrics(self.conn, "jcr", source, 2025, None, None)
+        self.assertEqual(summary["records_inserted"], 3)
+        older = self.root / "jcr-older.csv"
+        older.write_text(
+            "Journal,ISSN,Category,Quartile,Impact Factor\n"
+            "Synthetic Journal,1234-5678,OLD,Q4,0.5\n",
+            encoding="utf-8",
+        )
+        lw.import_metrics(self.conn, "jcr", older, 2024, None, None)
+        values = lw.local_metrics(self.conn, work(journal="Synthetic Journal"), "jcr")
+        self.assertEqual({row["category"] for row in values}, {"A", "B"})
+        fallback = lw.local_metrics(
+            self.conn,
+            work(journal="Synthetic Journal", issn_l="", issns=[]),
+            "jcr",
+        )
+        self.assertEqual({row["category"] for row in fallback}, {"A", "B", "C"})
+        selected = lw.local_metrics(self.conn, work(journal="Synthetic Journal"), "jcr", 2024)
+        self.assertEqual({row["category"] for row in selected}, {"OLD"})
+
+        revised = self.root / "jcr-revised.csv"
+        revised.write_text(
+            "Journal,ISSN,Category,Quartile,Impact Factor\n"
+            "Synthetic Journal Renamed,1234-5678,A,Q1,9.1\n",
+            encoding="utf-8",
+        )
+        lw.import_metrics(self.conn, "jcr", revised, 2025, None, None)
+        current = lw.local_metrics(self.conn, work(journal="Synthetic Journal"), "jcr", 2025)
+        a_rows = [row for row in current if row["category"] == "A"]
+        self.assertEqual([row["impact_factor"] for row in a_rows], [9.1])
+        self.assertEqual({row["impact_factor"] for row in current if row["category"] in {"A", "B"}}, {9.1})
+
+    def test_metric_import_accepts_original_wide_layouts(self):
+        source = self.root / "wide-jcr.csv"
+        source.write_text(
+            "Journal,ISSN,EISSN,IF(2025),Category_1,IF Quartile(2025)_1,Category_2,IF Quartile(2025)_2\n"
+            "J,1234-5678,8765-4321,8.0,A,Q1,B,Q2\n",
+            encoding="utf-8",
+        )
+        summary = lw.import_metrics(self.conn, "jcr", source, 2025, None, None)
+        self.assertEqual((summary["input_layout"], summary["rows_read"], summary["normalized_rows"]), ("wide", 1, 2))
+        jcr = lw.local_metrics(self.conn, work(issn_l="1234-5678", issns=[]), "jcr", 2025)
+        self.assertEqual({(row["category"], row["quartile"]) for row in jcr}, {("A", "Q1"), ("B", "Q2")})
+        self.assertEqual({row["impact_factor"] for row in jcr}, {8.0})
+
+        cas_source = self.root / "wide-cas.csv"
+        cas_source.write_text(
+            "Journal,年份,ISSN/EISSN,大类,大类分区,Top,小类1,小类1分区,小类2,小类2分区\n"
+            "J,2025,1234-5678/8765-4321,医学,1 [1/100],是,A,1 [1/50],B,2 [2/50]\n",
+            encoding="utf-8",
+        )
+        cas_summary = lw.import_metrics(self.conn, "cas", cas_source, 2025, None, None)
+        self.assertEqual((cas_summary["input_layout"], cas_summary["rows_read"], cas_summary["normalized_rows"]), ("wide", 1, 3))
+        cas = lw.local_metrics(self.conn, work(issn_l="8765-4321", issns=[]), "cas", 2025)
+        self.assertIn({"journal": "J", "scope": "major", "category": "医学", "zone": "1", "top": True, "provider": "cas", "metric_year": 2025}, cas)
+        self.assertEqual({(row["category"], row["zone"]) for row in cas if row["scope"] == "minor"}, {("A", "1"), ("B", "2")})
+
+        status = lw.metric_status(self.conn)
+        self.assertEqual({(row["provider"], row["metric_year"], row["journals"], row["issns"]) for row in status}, {
+            ("cas", 2025, 1, 2),
+            ("jcr", 2025, 1, 2),
+        })
+
+    def test_metric_import_rejects_conflicting_jif(self):
+        conflict = self.root / "conflict.csv"
+        conflict.write_text(
+            "Journal,ISSN,Category,Quartile,Impact Factor\nJ,1234-5678,A,Q1,8.0\nJ,1234-5678,B,Q2,7.0\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(lw.LitWatchError):
+            lw.import_metrics(self.conn, "jcr", conflict, 2025, None, None)
+
+    def test_metric_import_rejects_zero_usable_records(self):
+        invalid = self.root / "invalid-metrics.csv"
+        invalid.write_text(
+            "Journal,ISSN,Quartile\nJ,1234-5678,Q10\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(lw.LitWatchError):
+            lw.import_metrics(self.conn, "jcr", invalid, 2025, None, None)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0], 0)
+
+    def test_seed_and_metric_writes_respect_workspace_lock(self):
+        workspace = self.root / "locked-workspace"
+        workspace.mkdir()
+        lw.write_json(workspace / "config.json", lw.DEFAULT_CONFIG)
+        lw.connect_db(workspace, create=True).close()
+        seed = self.root / "locked-seed.json"
+        seed.write_text(json.dumps({"title": "Should not be written"}), encoding="utf-8")
+        metrics = self.root / "locked-metrics.csv"
+        metrics.write_text("Journal,ISSN,Quartile\nJ,1234-5678,Q1\n", encoding="utf-8")
+        (workspace / ".litwatch.lock").write_text("fixture", encoding="utf-8")
+        with self.assertRaises(lw.LitWatchError):
+            lw.command_seed_add(argparse.Namespace(
+                workspace=str(workspace), inputs=[str(seed)], negative=False, replace=False, offline=True,
+            ))
+        with self.assertRaises(lw.LitWatchError):
+            lw.command_metrics_import(argparse.Namespace(
+                workspace=str(workspace), provider="jcr", file=str(metrics), year=2025,
+                mapping=None, encoding=None,
+            ))
+        conn = lw.connect_db(workspace, readonly=True)
+        try:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM seeds").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_metrics").fetchone()[0], 0)
+        finally:
+            conn.close()
+
+    def test_replace_seed_batch_is_atomic(self):
+        workspace = self.root / "seed-workspace"
+        workspace.mkdir()
+        lw.write_json(workspace / "config.json", lw.DEFAULT_CONFIG)
+        conn = lw.connect_db(workspace, create=True)
+        original = work(title="Original seed", doi="10.1234/original", openalex_id="W700")
+        conn.execute(
+            "INSERT INTO seeds(seed_key,polarity,input_label,work_json,added_at) VALUES(?,?,?,?,?)",
+            (lw.canonical_work_key(original), "positive", "original", json.dumps(original), lw.iso_now()),
+        )
+        conn.commit()
+        conn.close()
+        valid = self.root / "valid.json"
+        valid.write_text(json.dumps({"title": "Replacement", "doi": "10.1234/replacement"}), encoding="utf-8")
+        broken = self.root / "broken.json"
+        broken.write_text("{", encoding="utf-8")
+        args = argparse.Namespace(
+            workspace=str(workspace),
+            inputs=[str(valid), str(broken)],
+            negative=False,
+            replace=True,
+            offline=True,
+        )
+        with self.assertRaises(lw.LitWatchError):
+            lw.command_seed_add(args)
+        conn = lw.connect_db(workspace, readonly=True)
+        rows = conn.execute("SELECT work_json FROM seeds").fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0][0])["title"], "Original seed")
+
+    def test_seed_batch_reports_unique_writes(self):
+        workspace = self.root / "dedupe-seed-workspace"
+        workspace.mkdir()
+        lw.write_json(workspace / "config.json", lw.DEFAULT_CONFIG)
+        lw.connect_db(workspace, create=True).close()
+        first = self.root / "first-seed.json"
+        second = self.root / "second-seed.json"
+        first.write_text(json.dumps({"title": "First title", "doi": "10.1234/same"}), encoding="utf-8")
+        second.write_text(json.dumps({"title": "Second title", "doi": "10.1234/same", "abstract": "More metadata"}), encoding="utf-8")
+        output = io.StringIO()
+        with patch("sys.stdout", output):
+            lw.command_seed_add(argparse.Namespace(
+                workspace=str(workspace), inputs=[str(first), str(second)], negative=False,
+                replace=False, offline=True,
+            ))
+        summary = json.loads(output.getvalue())
+        self.assertEqual((summary["inputs_parsed"], summary["duplicates_collapsed"], summary["added"]), (2, 1, 1))
+        conn = lw.connect_db(workspace, readonly=True)
+        try:
+            stored = json.loads(conn.execute("SELECT work_json FROM seeds").fetchone()[0])
+            self.assertEqual((stored["title"], stored["abstract"]), ("Second title", "More metadata"))
+        finally:
+            conn.close()
+
+    def test_refresh_preserves_screening_and_rotation_includes_formerly_relevant(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        initial = result(work(openalex_id="W810", doi="10.1234/refresh"), status="accepted", score=61)
+        stored = lw.upsert_result(self.conn, initial, "2026-01-01T00:00:00Z")
+        state = lw.tracked_works(self.conn)[0]
+        pool = lw.CandidatePool()
+        key = pool.add(lw.merge_records(state["work"], work(openalex_id="W810", doi="10.1234/refresh", cited_by_count=99)), "refresh", 1)
+        pool.lifecycle[key] = state
+        refreshed = lw.evaluate_pool(self.conn, pool, [work()], [], cfg)[0]
+        self.assertEqual((refreshed["status"], refreshed["score"]), ("accepted", 61.0))
+        self.assertEqual(refreshed["provenance"], initial["provenance"])
+
+        pool = lw.CandidatePool()
+        key = pool.add(lw.merge_records(state["work"], {"is_retracted": True, "relation_flags": ["retraction"]}), "refresh", 1)
+        pool.lifecycle[key] = state
+        retracted = lw.evaluate_pool(self.conn, pool, [work()], [], cfg)[0]
+        self.assertEqual(retracted["status"], "rejected")
+        self.assertEqual(retracted["score"], 61.0)
+        lw.upsert_result(self.conn, retracted, "2026-01-02T00:00:00Z")
+
+        second = lw.upsert_result(
+            self.conn,
+            result(work(openalex_id="W811", doi="10.1234/second"), status="accepted"),
+            "2026-01-01T00:00:00Z",
+        )
+        never_relevant = lw.upsert_result(
+            self.conn,
+            result(work(openalex_id="W812", doi="10.1234/never"), status="rejected", score=1),
+            "2026-01-01T00:00:00Z",
+        )
+        self.conn.execute(
+            "INSERT OR REPLACE INTO source_state(source,checkpoint,updated_at) VALUES(?,?,?)",
+            ("lifecycle:" + second["work_key"], "2026-01-01", "2026-01-01T00:00:00Z"),
+        )
+        tracked = lw.tracked_works(self.conn)
+        keys = {item["work_key"] for item in tracked}
+        self.assertIn(stored["work_key"], keys)
+        self.assertIn(second["work_key"], keys)
+        self.assertNotIn(never_relevant["work_key"], keys)
+        self.assertEqual(tracked[0]["work_key"], stored["work_key"])
+
+    def test_refresh_keeps_identity_when_openalex_redirects(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        original = work(doi="", pmid="", arxiv_id="", openalex_id="WOLD")
+        stored = lw.upsert_result(self.conn, result(original), "2026-01-01T00:00:00Z")
+        state = lw.tracked_works(self.conn)[0]
+        pool = lw.CandidatePool()
+        key = pool.add(lw.merge_records(state["work"], work(doi="", pmid="", arxiv_id="", openalex_id="WNEW")), "refresh", 1)
+        pool.lifecycle[key] = state
+        refreshed = lw.evaluate_pool(self.conn, pool, [work()], [], cfg)[0]
+        updated = lw.upsert_result(self.conn, refreshed, "2026-01-02T00:00:00Z")
+        self.assertEqual(updated["work_key"], stored["work_key"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM works").fetchone()[0], 1)
+        aliases = dict(self.conn.execute("SELECT alias,work_key FROM aliases"))
+        self.assertEqual(aliases["openalex:WOLD"], aliases["openalex:WNEW"])
+
+
+if __name__ == "__main__":
+    unittest.main()

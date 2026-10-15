@@ -1,0 +1,13 @@
+{
+  "profile": {
+    "extra_queries": [
+      "pathology image molecular phenotype prediction",
+      "histology whole slide gene expression prediction",
+      "H&E spatial transcriptomics prediction"
+    ],
+    "exclude_title_terms": [
+      "computed tomography",
+      "magnetic resonance imaging"
+    ]
+  }
+}

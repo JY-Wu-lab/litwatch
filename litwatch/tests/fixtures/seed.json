@@ -1,0 +1,8 @@
+{
+  "title": "Synthetic histology prediction from spatial molecular profiles",
+  "abstract": "A synthetic fixture for testing seed-driven literature discovery without network access.",
+  "authors": ["Ada Example"],
+  "year": 2025,
+  "doi": "10.5555/litwatch.fixture",
+  "metadata_sources": ["synthetic-fixture"]
+}
