@@ -8,6 +8,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
@@ -586,6 +587,85 @@ class StateTest(unittest.TestCase):
         twice = lw.upsert_result(self.conn, result(corrected), "2026-01-03T00:00:00Z")
         self.assertIn("correction", {event["kind"] for event in once["events"]})
         self.assertNotIn("correction", {event["kind"] for event in twice["events"]})
+
+    def test_excel_library_accumulates_only_ever_accepted_unique_papers(self):
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        source = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_complete": True}
+        first = work(
+            title="=SUM(1,1)\x01",
+            abstract="A" * 40_000,
+            doi="10.9999/excel-first",
+            openalex_id="WEXCEL1",
+            publisher_url="https://example.org/paper?a=1&b=2",
+        )
+        second = work(title="Second accepted paper", doi="10.9999/excel-second", openalex_id="WEXCEL2")
+
+        def workbook_rows(path: Path) -> list[dict[str, str]]:
+            with zipfile.ZipFile(path) as archive:
+                xml = archive.read("xl/worksheets/sheet1.xml")
+            root = ET.fromstring(xml)
+            ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            parsed: list[dict[int, str]] = []
+            for row in root.findall(".//x:sheetData/x:row", ns):
+                values: dict[int, str] = {}
+                for cell in row.findall("x:c", ns):
+                    letters = cell.attrib["r"].rstrip("0123456789")
+                    column = 0
+                    for letter in letters:
+                        column = column * 26 + ord(letter) - 64
+                    if cell.attrib.get("t") == "inlineStr":
+                        value = "".join(node.text or "" for node in cell.findall(".//x:t", ns))
+                    else:
+                        node = cell.find("x:v", ns)
+                        value = node.text if node is not None and node.text is not None else ""
+                    values[column] = value
+                parsed.append(values)
+            headers = parsed[0]
+            return [
+                {name: row.get(column, "") for column, name in headers.items()}
+                for row in parsed[1:]
+            ]
+
+        empty_workbook = self.root / "empty.xlsx"
+        lw.rebuild_accepted_xlsx(self.conn, empty_workbook)
+        self.assertEqual(workbook_rows(empty_workbook), [])
+
+        lw.save_run(
+            self.conn,
+            self.root,
+            "discover",
+            [result(first, "accepted", 90), result(second, "rejected", 10)],
+            source,
+            lw.date(2026, 1, 1),
+            cfg,
+        )
+        workbook = self.root / "reports" / "accepted_papers.xlsx"
+        self.assertTrue(zipfile.is_zipfile(workbook))
+        rows = workbook_rows(workbook)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "=SUM(1,1)")
+        self.assertEqual(len(rows[0]["abstract"]), lw.XLSX_MAX_CELL_CHARS)
+        self.assertTrue(rows[0]["abstract"].endswith("…"))
+
+        lw.save_run(
+            self.conn,
+            self.root,
+            "watch",
+            [result(first, "rejected", 20), result(second, "accepted", 85)],
+            source,
+            lw.date(2026, 1, 2),
+            cfg,
+        )
+        rows = workbook_rows(workbook)
+        self.assertEqual([row["title"] for row in rows], ["=SUM(1,1)", "Second accepted paper"])
+        self.assertEqual([row["current_status"] for row in rows], ["rejected", "accepted"])
+        with zipfile.ZipFile(workbook) as archive:
+            sheet = archive.read("xl/worksheets/sheet1.xml")
+            self.assertNotIn(b"<f", sheet)
+            self.assertIn("xl/worksheets/_rels/sheet1.xml.rels", archive.namelist())
+            for name in archive.namelist():
+                if name.endswith((".xml", ".rels")):
+                    ET.fromstring(archive.read(name))
 
     def test_failed_search_does_not_advance_checkpoint(self):
         cfg = deepcopy(lw.DEFAULT_CONFIG)

@@ -3,7 +3,7 @@ name: litwatch
 description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: MIT
 metadata:
-  version: "2.3.4"
+  version: "2.3.6"
   schema-version: "1"
 ---
 
@@ -18,8 +18,12 @@ with its absolute path.
 ## Workflow
 
 1. Confirm the host can run Python 3.11+, access HTTPS, and write to a persistent
-   workspace outside this skill directory. If not, explain that only a manual
-   query/configuration workflow is possible.
+   workspace outside this skill directory. Use the workspace path explicitly
+   supplied by the user. If none was supplied, ask for or agree on one; never
+   invent a drive letter, reuse a documentation placeholder literally, or assume
+   a fixed path from another user's machine. If the host cannot meet these
+   requirements, explain that only a manual query/configuration workflow is
+   possible.
 2. Initialize once:
 
        python scripts/litwatch.py init --workspace WORKSPACE
@@ -43,16 +47,28 @@ with its absolute path.
        python scripts/litwatch.py seed add --workspace WORKSPACE --offline seeds.json
 
    Add known false positives with `--negative`. `--replace` replaces only the
-   selected polarity; otherwise additions accumulate.
+   selected polarity; otherwise additions accumulate. Before using a negative
+   seed, compare it with the positives. A recommendation, commentary, duplicate,
+   or notice that repeats a positive paper's title is a poor negative seed: the
+   lexical ranker can suppress the wanted topic itself. Use document-type or
+   title exclusions for that record class, and reserve negative seeds for a
+   genuinely unwanted topic or concept.
 4. Run a dry baseline first, inspect accepted/pending/rejected reasons, then save:
 
        python scripts/litwatch.py discover --workspace WORKSPACE --dry-run --explain
        python scripts/litwatch.py discover --workspace WORKSPACE
 
-   If the user requests JCR, CAS, or JIF screening, first run `metrics status`.
-   Import an authorized local edition when needed and select its year. For a
-   reusable layout, keep those files under `WORKSPACE/local-metrics/`, but do not
-   assume placement imports them: run `metrics import` explicitly. For a
+   If the user requests JCR, CAS, or JIF screening, read
+   [configuration.md](references/configuration.md), then run `metrics status`.
+   Import an authorized local CSV edition when available and select its year.
+   If the user has an XLSX export, convert the relevant sheet to CSV locally
+   before import. For a reusable layout, keep those files under
+   `WORKSPACE/local-metrics/`, but do not assume placement imports them: run
+   `metrics import` explicitly. Do not search for, download, or fabricate a
+   licensed table on the user's behalf. If no authorized edition is available,
+   continue discovery without a JCR/CAS/JIF hard filter and state that those
+   fields are unavailable; public OpenAlex 2-year mean citedness may be shown
+   under that exact name but is not a substitute. For a
    strict venue rule, use `hard_filter=true` and `missing=exclude_strict`; if
    the requested edition is absent, report that gap instead of guessing a
    partition. Multiple active metric criteria combine with AND. Whenever a
@@ -62,10 +78,13 @@ with its absolute path.
    selects an import format; it does not prove that a user-supplied file is an
    official export. If provenance is not verified, say so.
 
-5. For later runs use `watch`. `reports/`, `latest.json`, `latest.md`, and
-   `library.csv` exist only after the first saved (non-dry-run) `discover` or
-   `watch`. Read `reports/latest.json`; say clearly when `complete` is false or
-   `bounded` is true. A clean zero-result run is not an incomplete run.
+5. For later runs use `watch`. `reports/`, `latest.json`, `latest.md`,
+   `library.csv`, and `accepted_papers.xlsx` exist only after the first saved
+   (non-dry-run) `discover` or `watch`. Read `reports/latest.json`; say clearly
+   when `complete` is false or `bounded` is true. A clean zero-result run is not
+   an incomplete run. `accepted_papers.xlsx` is a cumulative, deduplicated view
+   of papers ever accepted; it is atomically rebuilt from SQLite, so manual
+   workbook edits are overwritten and the file should be closed before a run.
 6. Summarize results in the user's language. Preserve relationship labels
    (`reference`, `citation`, `related`, `search`, `pubmed_similar`) and the
    accepted/pending/rejected distinction. Call preprints unreviewed when known.
@@ -103,7 +122,9 @@ with its absolute path.
   Crossref enriches metadata, and PubMed is optional.
 - JCR/CAS/JIF data are local, optional, and license-sensitive. Never call
   OpenAlex two-year mean citedness “JIF” or infer individual-paper quality from
-  a journal metric.
+  a journal metric. Never upload or republish a user's licensed table merely to
+  make import convenient; inspect and convert it within the authorized local
+  environment.
 - The Chinese Academy of Sciences National Science Library announced that it
   stopped updating and publishing its partition table from 2026. Treat 2025 as
   the last official historical CAS edition; label later third-party systems by
@@ -120,7 +141,8 @@ with its absolute path.
 - Read [compatibility-and-security.md](references/compatibility-and-security.md)
   for host support, privacy, scheduling, or publication guidance.
 - Read [output-schema.md](references/output-schema.md) when another tool will
-  consume `latest.json`, SQLite state, or `library.csv`.
+  consume `latest.json`, SQLite state, `library.csv`, or
+  `accepted_papers.xlsx`.
 - Read [interpretation.md](references/interpretation.md) only for deep reading,
   critical appraisal, evidence extraction, or cross-paper synthesis.
 

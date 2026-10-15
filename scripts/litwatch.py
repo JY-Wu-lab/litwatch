@@ -25,21 +25,26 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from collections import Counter
 from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
+from xml.sax.saxutils import escape as xml_escape, quoteattr
 
 
-VERSION = "2.3.4"
+VERSION = "2.3.6"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
 MAX_TEXT_SEED_BYTES = 20 * 1024 * 1024
 MAX_PDF_SEED_BYTES = 100 * 1024 * 1024
 MAX_METRICS_BYTES = 128 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 25 * 1024 * 1024
+XLSX_MAX_ROWS = 1_048_576
+XLSX_MAX_CELL_CHARS = 32_767
+XLSX_STYLE_IDS = {"text": 2, "decimal": 3, "integer": 4, "boolean": 5, "link": 6}
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
 OA_RE = re.compile(r"(?:https?://(?:api\.)?openalex\.org/(?:works/)?|openalex\.org/)?(W\d+)/?(?:[?#].*)?$", re.I)
 PMID_RE = re.compile(
@@ -2869,6 +2874,318 @@ def rebuild_library_csv(conn: sqlite3.Connection, path: Path) -> None:
         raise
 
 
+def _xlsx_column_name(number: int) -> str:
+    value = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        value = chr(65 + remainder) + value
+    return value
+
+
+def _xlsx_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    text = "".join(
+        char
+        for char in text
+        if char in "\t\n\r"
+        or 0x20 <= ord(char) <= 0xD7FF
+        or 0xE000 <= ord(char) <= 0xFFFD
+        or 0x10000 <= ord(char) <= 0x10FFFF
+    )
+    if len(text) > XLSX_MAX_CELL_CHARS:
+        text = text[: XLSX_MAX_CELL_CHARS - 1] + "…"
+    return text
+
+
+def _xlsx_cell(reference: str, value: Any, kind: str) -> str:
+    if value is None or value == "":
+        return ""
+    style = XLSX_STYLE_IDS[kind]
+    if kind == "boolean" and isinstance(value, bool):
+        return f'<c r="{reference}" s="{style}" t="b"><v>{int(value)}</v></c>'
+    if kind in {"decimal", "integer"} and isinstance(value, (int, float)) and not isinstance(value, bool):
+        if math.isfinite(float(value)):
+            return f'<c r="{reference}" s="{style}" t="n"><v>{value}</v></c>'
+    text = xml_escape(_xlsx_text(value))
+    return f'<c r="{reference}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{text}</t></is></c>'
+
+
+def _accepted_work_times(conn: sqlite3.Connection) -> dict[str, str]:
+    accepted: dict[str, str] = {}
+    events = conn.execute(
+        "SELECT work_key,kind,event_at,details_json FROM events ORDER BY event_at,id"
+    ).fetchall()
+    for event in events:
+        try:
+            details = json.loads(event["details_json"])
+        except (TypeError, json.JSONDecodeError):
+            details = {}
+        if not isinstance(details, dict):
+            details = {}
+        qualifies = (
+            event["kind"] == "accepted"
+            or (event["kind"] == "discovered" and details.get("status") == "accepted")
+            or (event["kind"] == "became_relevant" and details.get("new_status") == "accepted")
+        )
+        if qualifies:
+            accepted.setdefault(event["work_key"], event["event_at"])
+    for row in conn.execute("SELECT work_key,first_seen FROM works WHERE status='accepted'"):
+        accepted.setdefault(row["work_key"], row["first_seen"])
+    return accepted
+
+
+def rebuild_accepted_xlsx(conn: sqlite3.Connection, path: Path) -> None:
+    columns = [
+        ("title", 48, "text"),
+        ("authors", 34, "text"),
+        ("journal", 28, "text"),
+        ("publication_date", 16, "text"),
+        ("current_status", 14, "text"),
+        ("score", 10, "decimal"),
+        ("reasons", 38, "text"),
+        ("litwatch_first_accepted_at", 22, "text"),
+        ("first_seen", 22, "text"),
+        ("last_seen", 22, "text"),
+        ("year", 10, "integer"),
+        ("document_type", 16, "text"),
+        ("abstract", 60, "text"),
+        ("doi", 26, "text"),
+        ("pmid", 14, "text"),
+        ("arxiv_id", 18, "text"),
+        ("openalex_id", 16, "text"),
+        ("cited_by_count", 12, "integer"),
+        ("is_preprint", 11, "boolean"),
+        ("is_retracted", 11, "boolean"),
+        ("is_update_notice", 14, "boolean"),
+        ("submitted_date", 16, "text"),
+        ("received_date", 16, "text"),
+        ("revised_dates", 22, "text"),
+        ("accepted_date", 16, "text"),
+        ("published_online_date", 20, "text"),
+        ("published_print_date", 19, "text"),
+        ("posted_date", 16, "text"),
+        ("is_oa", 10, "boolean"),
+        ("oa_status", 13, "text"),
+        ("licenses", 22, "text"),
+        ("journal_metrics", 36, "text"),
+        ("discovery_channels", 24, "text"),
+        ("topics", 34, "text"),
+        ("metadata_sources", 24, "text"),
+        ("source_id", 16, "text"),
+        ("issn_l", 14, "text"),
+        ("issns", 22, "text"),
+        ("work_key", 36, "text"),
+        ("url", 42, "link"),
+        ("doi_url", 42, "link"),
+        ("publisher_url", 42, "link"),
+        ("primary_url", 42, "link"),
+        ("oa_url", 42, "link"),
+        ("pdf_url", 42, "link"),
+        ("pubmed_url", 42, "link"),
+        ("arxiv_url", 42, "link"),
+        ("openalex_url", 42, "link"),
+        ("score_breakdown_json", 45, "text"),
+        ("relationship_evidence_json", 45, "text"),
+        ("journal_metrics_json", 45, "text"),
+        ("relations_json", 45, "text"),
+    ]
+    accepted_at = _accepted_work_times(conn)
+    records: list[dict[str, Any]] = []
+    for row in conn.execute(
+        "SELECT work_key,record_json,status,score,reasons_json,first_seen,last_seen FROM works"
+    ):
+        if row["work_key"] not in accepted_at:
+            continue
+        work = json.loads(row["record_json"])
+        links = paper_links(work)
+        provenance = work.get("discovery_provenance") or []
+        records.append({
+            "title": work.get("title"),
+            "authors": "; ".join(str(value) for value in (work.get("authors") or [])),
+            "journal": work.get("journal"),
+            "publication_date": work.get("publication_date"),
+            "current_status": row["status"],
+            "score": row["score"],
+            "reasons": "; ".join(str(value) for value in json.loads(row["reasons_json"])),
+            "litwatch_first_accepted_at": accepted_at[row["work_key"]],
+            "first_seen": row["first_seen"],
+            "last_seen": row["last_seen"],
+            "year": work.get("year"),
+            "document_type": work.get("type"),
+            "abstract": work.get("abstract"),
+            "doi": normalize_doi(work.get("doi")),
+            "pmid": work.get("pmid"),
+            "arxiv_id": work.get("arxiv_id"),
+            "openalex_id": work.get("openalex_id"),
+            "cited_by_count": work.get("cited_by_count"),
+            "is_preprint": bool(work.get("is_preprint")),
+            "is_retracted": bool(work.get("is_retracted")),
+            "is_update_notice": bool(work.get("is_update_notice")),
+            "submitted_date": work.get("submitted_date"),
+            "received_date": work.get("received_date"),
+            "revised_dates": "; ".join(str(value) for value in (work.get("revised_dates") or [])),
+            "accepted_date": work.get("accepted_date"),
+            "published_online_date": work.get("published_online_date"),
+            "published_print_date": work.get("published_print_date"),
+            "posted_date": work.get("posted_date"),
+            "is_oa": work.get("is_oa") if isinstance(work.get("is_oa"), bool) else None,
+            "oa_status": work.get("oa_status") or (
+                "unknown" if work.get("is_oa") is None else "yes" if work.get("is_oa") else "no"
+            ),
+            "licenses": "; ".join(str(value) for value in (work.get("licenses") or [])),
+            "journal_metrics": compact_metrics(work),
+            "discovery_channels": "; ".join(sorted({
+                str(item.get("channel")) for item in provenance if isinstance(item, dict) and item.get("channel")
+            })),
+            "topics": "; ".join(str(value) for value in (work.get("topics") or [])),
+            "metadata_sources": "; ".join(str(value) for value in (work.get("metadata_sources") or [])),
+            "source_id": work.get("source_id"),
+            "issn_l": work.get("issn_l"),
+            "issns": "; ".join(str(value) for value in (work.get("issns") or [])),
+            "work_key": row["work_key"],
+            "url": paper_url(work),
+            "doi_url": links["doi"],
+            "publisher_url": links["publisher"],
+            "primary_url": links["primary"],
+            "oa_url": links["open_access"],
+            "pdf_url": links["pdf"],
+            "pubmed_url": links["pubmed"],
+            "arxiv_url": links["arxiv"],
+            "openalex_url": links["openalex"],
+            "score_breakdown_json": json.dumps(
+                work.get("discovery_score_breakdown") or {}, ensure_ascii=False, sort_keys=True
+            ),
+            "relationship_evidence_json": json.dumps(provenance, ensure_ascii=False, sort_keys=True),
+            "journal_metrics_json": json.dumps(
+                work.get("journal_metrics") or {}, ensure_ascii=False, sort_keys=True
+            ),
+            "relations_json": json.dumps(work.get("relations") or [], ensure_ascii=False, sort_keys=True),
+        })
+    records.sort(key=lambda item: (item["litwatch_first_accepted_at"], item["work_key"]))
+    if len(records) + 1 > XLSX_MAX_ROWS:
+        raise LitWatchError(f"accepted_papers.xlsx exceeds Excel's {XLSX_MAX_ROWS:,}-row limit")
+
+    last_column = _xlsx_column_name(len(columns))
+    column_names = [_xlsx_column_name(index) for index in range(1, len(columns) + 1)]
+    last_row = len(records) + 1
+    hyperlinks: list[tuple[str, str]] = []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+            archive.writestr("[Content_Types].xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>""")
+            archive.writestr("_rels/.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>""")
+            archive.writestr("xl/workbook.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<bookViews><workbookView/></bookViews>
+<sheets><sheet name="Accepted papers" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""")
+            archive.writestr("xl/_rels/workbook.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>""")
+            archive.writestr("xl/styles.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="3">
+<font><sz val="10"/><name val="Arial"/><family val="2"/></font>
+<font><b/><color rgb="FFFFFFFF"/><sz val="10"/><name val="Arial"/><family val="2"/></font>
+<font><u/><color rgb="FF0563C1"/><sz val="10"/><name val="Arial"/><family val="2"/></font>
+</fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right style="thin"><color rgb="FFFFFFFF"/></right><top/><bottom style="thin"><color rgb="FFFFFFFF"/></bottom><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="7">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>""")
+            created = iso_now()
+            archive.writestr("docProps/core.xml", f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:creator>LitWatch</dc:creator><cp:lastModifiedBy>LitWatch</cp:lastModifiedBy>
+<dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{created}</dcterms:modified>
+</cp:coreProperties>""")
+            archive.writestr("docProps/app.xml", f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+<Application>LitWatch</Application><AppVersion>{VERSION}</AppVersion>
+</Properties>""")
+
+            widths = "".join(
+                f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
+                for index, (_, width, _) in enumerate(columns, 1)
+            )
+            prefix = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<dimension ref="A1:{last_column}{last_row}"/>
+<sheetViews><sheetView showGridLines="0" workbookViewId="0"><pane xSplit="1" ySplit="1" topLeftCell="B2" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="18"/><cols>{widths}</cols><sheetData>"""
+            with archive.open("xl/worksheets/sheet1.xml", "w") as sheet:
+                sheet.write(prefix.encode("utf-8"))
+                header_cells = "".join(
+                    f'<c r="{column_name}1" s="1" t="inlineStr"><is><t>{xml_escape(column[0])}</t></is></c>'
+                    for column_name, column in zip(column_names, columns)
+                )
+                sheet.write(f'<row r="1" ht="30" customHeight="1">{header_cells}</row>'.encode("utf-8"))
+                for row_number, record in enumerate(records, 2):
+                    cells: list[str] = []
+                    for column_name, (name, _, kind) in zip(column_names, columns):
+                        reference = f"{column_name}{row_number}"
+                        value = record.get(name)
+                        cell = _xlsx_cell(reference, value, kind)
+                        if cell:
+                            cells.append(cell)
+                        if kind == "link":
+                            link = safe_https_url(value)
+                            if link and len(link) <= 8192:
+                                hyperlinks.append((reference, link))
+                    sheet.write(f'<row r="{row_number}">{"".join(cells)}</row>'.encode("utf-8"))
+                sheet.write(f'</sheetData><autoFilter ref="A1:{last_column}{last_row}"/>'.encode("utf-8"))
+                if hyperlinks:
+                    sheet.write(("<hyperlinks>" + "".join(
+                        f'<hyperlink ref="{reference}" r:id="rId{index}"/>'
+                        for index, (reference, _) in enumerate(hyperlinks, 1)
+                    ) + "</hyperlinks>").encode("utf-8"))
+                sheet.write(b"</worksheet>")
+            if hyperlinks:
+                relationships = "".join(
+                    f'<Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target={quoteattr(url)} TargetMode="External"/>'
+                    for index, (_, url) in enumerate(hyperlinks, 1)
+                )
+                archive.writestr("xl/worksheets/_rels/sheet1.xml.rels", f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{relationships}</Relationships>""")
+        os.replace(tmp_name, path)
+    except Exception as exc:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        if isinstance(exc, PermissionError):
+            raise LitWatchError(f"Cannot update {path}; close it in Excel and retry") from exc
+        raise
+
+
 def save_run(
     conn: sqlite3.Connection,
     workspace: Path,
@@ -2940,6 +3257,7 @@ def save_run(
         write_json(reports / "latest.json", report)
         atomic_write(reports / "latest.md", render_markdown(report))
         rebuild_library_csv(conn, reports / "library.csv")
+        rebuild_accepted_xlsx(conn, reports / "accepted_papers.xlsx")
     return report, json_path
 
 

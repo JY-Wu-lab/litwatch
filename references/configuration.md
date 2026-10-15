@@ -97,6 +97,43 @@ demote an otherwise high-scoring record.
 The default is annotation only: metrics.hard_filter=false. This is deliberate;
 journal metrics are venue-level proxies, not paper-quality scores.
 
+### Choose the data path before configuring a filter
+
+1. Run `metrics status`. If the requested provider and edition are already
+   listed, select that exact year in config.
+2. If the user has an authorized JCR or historical CAS export, keep it anywhere
+   the host can read; `WORKSPACE/local-metrics/` is only a recommended private
+   location. LitWatch accepts CSV, not XLSX. Convert the relevant worksheet to
+   CSV locally when necessary, then run `metrics import` explicitly.
+3. If the user has no authorized table, do not block ordinary discovery and do
+   not obtain a mirror on the user's behalf. Leave JCR/CAS/JIF criteria disabled,
+   say that these metrics are unavailable, and optionally display the public
+   `OpenAlex 2-year mean citedness` under that exact label. It is neither JIF nor
+   a partition.
+
+Official acquisition routes are access-controlled and can change:
+
+- Clarivate JCR requires appropriate institutional or individual access. In
+  Browse Journals, users can filter an edition/category and export the first 600
+  sorted records as CSV or Excel. The JCR application has not offered a full
+  bulk download since March 2022; larger programmatic access uses the separately
+  licensed Web of Science Journals API. See the official
+  [browse/export help](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals),
+  [download limits](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351328522257-Downloading-Information),
+  and [Journals API](https://developer.clarivate.com/apis/wos-journal).
+- The historical CAS table was supplied through
+  [fenqubiao.com](https://www.fenqubiao.com/). Its official
+  [help page](https://www.fenqubiao.com/user/Help.aspx) describes institutional,
+  CARSI, and personal access plus batch-query downloads where permitted. The
+  publisher stopped updates from 2026, so 2025 is the last official historical
+  edition. Do not call later third-party rankings official CAS data.
+
+The model may inspect headers, help save an XLSX worksheet as CSV, construct a
+`--mapping` file, and run the local importer. It cannot establish licensing or
+authenticity merely from a filename, `--provider`, or a web search. Never upload
+or redistribute the source table unless the user's license and environment
+explicitly permit it.
+
 When hard_filter is true, every configured criterion is combined with AND:
 
 - OpenAlex min_2yr_mean_citedness: public OpenAlex source statistic. It is not
@@ -113,8 +150,8 @@ Clarivate JIF quartiles/JIF, `CAS <year>` plus major/minor scope for historical
 Chinese Academy of Sciences National Science Library zones, and the exact name
 `OpenAlex 2-year mean citedness` for the public OpenAlex statistic. The CAS
 publisher announced that it stopped updating and publishing the table from
-2026, making 2025 the final official historical edition:
-https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html
+2026, making 2025 the final official historical edition; see its
+[official notice](https://www.cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html).
 
 The import `provider` is a user-declared schema choice, not an authenticity
 check. When a file's provenance has not been verified, call it user-supplied
@@ -158,9 +195,10 @@ one file reject the import atomically. If matches from different identifiers or
 prior data still disagree, LitWatch reports a data conflict and leaves that
 filter pending. Aggregation applies to category quartiles, never to JIF.
 
-JCR and CAS data are intentionally absent from this repository. Their official
-terms restrict redistribution; possession of a third-party mirror does not
-prove redistribution rights.
+JCR and CAS data are intentionally absent from this repository. Access and reuse
+depend on the provider and the user's subscription or institutional terms;
+possession of a third-party mirror does not prove provenance or redistribution
+rights.
 
 ## Preset
 

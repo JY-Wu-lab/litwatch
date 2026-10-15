@@ -15,13 +15,14 @@ source data.
 The original publishers are Clarivate for Journal Citation Reports and the
 Chinese Academy of Sciences National Science Library for its historical Journal
 Partition Table. The latter announced that it stopped updating and publishing
-the table from 2026; 2025 is the final official historical CAS edition:
-https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html
+the table from 2026; 2025 is the final official historical CAS edition. Its
+official notice is available at:
+https://www.cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html
 
-Clarivate's published JCR usage guidance states that wholesale sharing outside
-a subscriber's institution is prohibited and that some publication uses require
-permission:
-https://clarivate.com/academia-government/blog/a-quick-refresher-on-journal-citation-reports-use-cases-branding-and-terms-of-use/
+JCR access, export, API use, and downstream reuse remain subject to Clarivate's
+current subscription and usage terms. Official product and download guidance:
+https://clarivate.com/academia-government/scientific-and-academic-research/research-funding-analytics/journal-citation-reports/
+https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351328522257-Downloading-Information
 
 Compatibility with the common ShowJCR-style CSV layout is parser behavior only.
 The ShowJCR code license does not by itself grant rights to redistribute the

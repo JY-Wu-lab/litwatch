@@ -3,22 +3,42 @@
 ## Workspace
 
     WORKSPACE/
-      config.json
-      litwatch.db
-      reports/
-        YYYYMMDDTHHMMSS.ffffffZ.json
-        YYYYMMDDTHHMMSS.ffffffZ.md
-        latest.json
-        latest.md
-        library.csv
+    ├── config.json
+    ├── litwatch.db
+    ├── inputs/                         optional, user-created, never auto-scanned
+    ├── local-metrics/                  optional, user-created, never auto-imported
+    └── reports/                        after the first saved run
+        ├── YYYYMMDDTHHMMSS.ffffffZ.json
+        ├── YYYYMMDDTHHMMSS.ffffffZ.md
+        ├── latest.json
+        ├── latest.md
+        ├── library.csv
+        └── accepted_papers.xlsx
 
 The `reports/` directory and all files under it are created only by the first
 saved (non-dry-run) discover or watch. init creates only config/database state;
 a dry run does not create or update report files.
 
 Run files are immutable and timestamped, so two runs on one day cannot
-overwrite each other. latest files are atomic pointers by content. library.csv
-is rebuilt atomically from SQLite.
+overwrite each other. The latest files are atomically updated copies of the
+newest saved run. library.csv and accepted_papers.xlsx are rebuilt atomically
+from SQLite.
+
+File and directory meanings:
+
+| Path | Meaning |
+|---|---|
+| `config.json` | User-editable discovery, ranking, source, and filter settings. |
+| `litwatch.db` | SQLite source of truth: seeds, works, aliases, events, run state, cache, and imported metric rows. |
+| `litwatch.db-wal`, `litwatch.db-shm` | SQLite sidecars that may appear while the database is open. Do not edit or delete them during a run. |
+| `.litwatch.lock` | Short-lived single-writer lock. It normally disappears when a command finishes; after a crash an old lock requires inspection before manual removal. |
+| `inputs/` | Optional user filing convention for seed files. LitWatch never scans it automatically. |
+| `local-metrics/` | Optional private location for source CSV files. Placement alone does not import them, and import stores normalized rows rather than copying the source file. |
+| timestamped `.json` | Immutable, complete structured result for one saved run. |
+| timestamped `.md` | Human-readable summary of that run; abstracts may be shortened. |
+| `latest.json`, `latest.md` | Copies of the newest saved run, replaced atomically each time. |
+| `library.csv` | Cumulative latest state of all stored works, including accepted, pending, and rejected. |
+| `accepted_papers.xlsx` | Cumulative deduplicated view of works accepted at least once; new acceptances append logically and existing rows update. |
 
 ## Report JSON
 
@@ -39,6 +59,33 @@ truncate them at `output.max_rejected`; its `counts.rejected` is the number
 actually written. A dry-run preview is not truncated this way. Use SQLite or
 the saved `library.csv` for cumulative state; `complete=true` does not promise
 that a saved rejected array is exhaustive.
+
+## Cumulative table exports
+
+`library.csv` contains the latest state of every stored work, including
+accepted, pending, and rejected records.
+
+`accepted_papers.xlsx` contains one row for every work that has ever had an
+accepted screening state. Rows are ordered by first acceptance, so newly
+accepted works appear at the bottom. A matching work updates the existing row;
+it is not appended again. A later pending/rejected state does not erase the row:
+`current_status`, score, reasons, metadata, and links show the latest saved
+state, while `litwatch_first_accepted_at` preserves when LitWatch first accepted
+it. This timestamp is a LitWatch screening timestamp and must not be confused
+with the article's `accepted_date`.
+
+The worksheet is a flat, filterable table with a frozen header and first column.
+It includes core bibliographic data, abstract, identifiers, screening evidence,
+publication-history dates, OA state, journal metrics, provenance, and validated
+HTTPS links. The rightmost JSON columns preserve complex score, relationship,
+metric, and relation structures. Text is stored as literal cell data rather
+than formulas, and overlong/invalid XML text is safely bounded. Excel's maximum
+of 1,048,576 rows is enforced.
+
+The XLSX is an output, not an editable input. It is fully and atomically rebuilt
+from SQLite after each saved run, which provides logical append/update behavior
+without risking in-place ZIP corruption. Manual workbook edits are overwritten.
+On Windows, close the workbook before a run so Excel does not block replacement.
 
 Each paper record contains stable identifiers, URL, title/authors/abstract,
 publication state, score and components, reasons, relationship_evidence,
@@ -92,7 +139,7 @@ dates in the article or publisher record and cite the source.
   source hash.
 - http_cache stores response bytes under SHA-256 URL keys.
 
-SQLite is the source of truth. JSON and CSV are reports, not state inputs.
+SQLite is the source of truth. JSON, CSV, and XLSX are reports, not state inputs.
 
 ## Lifecycle behavior
 

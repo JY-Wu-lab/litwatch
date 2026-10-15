@@ -38,6 +38,10 @@ Title text is counted twice; abstracts and provider topics once. Latin tokens
 and CJK bigrams are supported without an embedding dependency. This improves
 portability but cannot fully resolve synonyms across distant vocabularies.
 Negative seeds and extra search queries are the intended calibration knobs.
+A negative seed should represent an unwanted concept, not a recommendation,
+commentary, correction, or duplicate whose text repeats a positive seed. Such a
+near-duplicate can penalize the desired vocabulary globally; use document-type
+or literal title exclusions for that record class instead.
 
 Channel evidence begins with the largest configured channel weight and gains a
 small bonus from distinct channels, capped at 1.0. Citation count contributes

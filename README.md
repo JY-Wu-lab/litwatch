@@ -9,7 +9,8 @@ papers, their references, and papers that cite them; removes duplicates; and
 explains why each result passed or failed. On later runs it remembers what it
 has already seen and reports what is new. When requested, the AI can also deeply
 read up to three relevant papers whose full text is actually available. It does
-not pad the count.
+not pad the count. Every saved search also maintains a cumulative Excel list of
+papers that have passed screening.
 
 Search terms: paper search, related papers, literature discovery, citation
 snowballing, paper analysis, deep reading, critical appraisal, research
@@ -36,8 +37,11 @@ monitoring, preprint tracking, JCR quartile, CAS partition.
        sourced submission/receipt, revision, acceptance, and publication dates
        plus direct links. Mark missing facts unavailable; do not guess.
 
-You can search without JCR or CAS data. Import an authorized CSV only when you
-want to filter by journal quartile, CAS zone, or impact factor.
+You can search without JCR or CAS data. Import the corresponding authorized CSV
+only when you explicitly need JCR quartiles, JIF, or historical CAS partitions.
+Without a table, do not ask the model to guess or relabel an OpenAlex statistic
+as JIF. See “Using JCR, CAS partitions, and impact factors” for acquisition paths
+and copyable no-table prompts.
 
 ### Plain-language glossary
 
@@ -173,6 +177,49 @@ Alternatively, download the GitHub ZIP and extract it. The selected skill folder
 must be the directory that directly contains `SKILL.md`, `scripts/`, and
 `references/`; do not select its parent directory.
 
+### Repository map
+
+The downloaded repository looks like this. Runtime papers and reports do **not**
+belong here; they go in a separate workspace that you choose:
+
+    litwatch/
+    ├── SKILL.md
+    ├── README.md
+    ├── README.zh-CN.md
+    ├── LICENSE
+    ├── THIRD_PARTY_NOTICES.md
+    ├── agents/
+    │   └── openai.yaml
+    ├── scripts/
+    │   └── litwatch.py
+    ├── references/
+    │   ├── configuration.md
+    │   ├── sources-and-ranking.md
+    │   ├── interpretation.md
+    │   ├── output-schema.md
+    │   └── compatibility-and-security.md
+    ├── presets/
+    │   └── pathology-molecular.json
+    └── tests/
+        ├── test_litwatch.py
+        └── fixtures/
+
+| Path | Purpose |
+|---|---|
+| `SKILL.md` | Core instructions the model reads first, including discovery, screening, and interpretation boundaries |
+| `scripts/litwatch.py` | The CLI that initializes, imports seeds/metrics, searches, watches, and writes reports |
+| `references/` | Detailed task-specific rules for the model; ordinary users need not read all of them first |
+| `agents/openai.yaml` | Optional OpenAI UI metadata; the core is not OpenAI-dependent |
+| `presets/` | Optional example settings; never a substitute for the user's seed papers |
+| `tests/` | Developer tests and offline fixtures; normal users do not edit them |
+| `README*.md` | English and Chinese human-facing installation and usage guides |
+
+The repository has no fixed runtime path and requires no particular drive.
+`WORKSPACE`, `<YOUR_WORKSPACE>`, and `<CSV PATH>` are placeholders to replace,
+not literal paths. The model must use a writable folder explicitly supplied by
+you; if none is supplied, it should ask rather than assume a drive or a path
+from somebody else's machine.
+
 ### Install it for an AI agent
 
 Copy, clone, or link the **entire repository directory** into the Agent Skills
@@ -229,6 +276,13 @@ negative seed is a known false positive that teaches the ranker what to demote.
 A journal name alone is not a useful paper seed. Journal-level requirements such
 as JCR Q1, CAS zone 1–2, or a JIF threshold belong to metric filters.
 
+A negative seed should represent an unwanted topic or concept. Do not use a
+recommendation, commentary, correction, or duplicate that repeats a positive
+paper's title: the portable lexical ranker may demote the wanted topic itself.
+Use `filters.document_types` for an unwanted record class and
+`profile.exclude_title_terms` for a fixed title phrase. Preview after adding a
+negative; replace it if relevant papers fall together.
+
 For a one-off run, the simplest option is to attach the files to the model or
 paste the identifiers in the prompt. For repeated runs, keep inputs in the
 runtime workspace. The folder names below are a recommended convention, not an
@@ -277,16 +331,16 @@ Or tell the model:
     `seed list`, show me what was added, then preview the search without saving
     it (a dry run).
 
-Metric files are separate from seeds. Merely placing a CSV under
-`WORKSPACE/local-metrics/` does not enable it. Tell the model exactly which file,
-provider, and edition to import:
+Metric files are separate from seeds. Import only the JCR or historical CAS data
+you actually need. Merely placing a CSV under `WORKSPACE/local-metrics/` does not
+enable it; tell the model exactly which file, provider, and edition to import:
 
-    Use $litwatch with <YOUR_WORKSPACE>. Import <JCR CSV PATH> as provider
-    `jcr` with <JCR EDITION YEAR>, and <CAS CSV PATH> as provider `cas` with
-    <CAS EDITION YEAR>.
-    Run `metrics status` and tell me how many journals were imported. Then use
-    JCR Q1/Q2 and CAS major-zone 1/2 filters. Mark missing or conflicting data
-    as “needs review” unless I explicitly request exclusion.
+    Use $litwatch with <YOUR_WORKSPACE>. Import my <CSV PATH> as provider
+    <jcr OR cas> for edition <YEAR>. Run `metrics status` and tell me how many
+    journals were imported. Then apply <EXACT JCR QUARTILE/JIF OR CAS
+    MAJOR/MINOR RULE>. Mark missing or conflicting data as “needs review” unless
+    I explicitly request exclusion. Follow the provenance and no-table rules in
+    “Using JCR, CAS partitions, and impact factors” below.
 
 ## Usage mode 1 — ask an AI agent
 
@@ -402,7 +456,9 @@ directory, and keep the quotes so paths containing spaces work correctly.
 
 After the first saved (non-dry-run) `discover` or `watch`, the latest
 machine-readable result is `WORKSPACE/reports/latest.json`. `init` and dry runs
-do not create `reports/` or any `latest.*` file.
+do not create `reports/` or any `latest.*` file. Open
+`WORKSPACE/reports/accepted_papers.xlsx` for the cumulative, filterable Excel
+list of papers that have ever been accepted by LitWatch.
 
 ## Reference: supported paper inputs
 
@@ -607,85 +663,131 @@ belongs to an edition and category rather than being a permanent property of a
 journal. CAS partitions are a separate system and cannot be converted to or
 from JCR Q1–Q4.
 
-The Chinese Academy of Sciences National Science Library has
-[announced](https://cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html)
-that it stopped updating and publishing the partition table from 2026. **The
-2025 edition is therefore the final official historical CAS edition.** A later
-ranking published by another organization must name that publisher and must not
-be presented as an official CAS partition.
+### Decide which situation applies first
 
-LitWatch reports labels such as `JCR 2025 Q1` and `CAS 2025 major 1`. Note that
-`--provider jcr` or `--provider cas` selects a parser layout; it does not prove
-that a user-supplied file is an official export. When provenance cannot be
-verified, describe it as user-supplied JCR/CAS-format data.
+| Your situation | What to do |
+|---|---|
+| You already have a JCR/CAS CSV | Check publisher, edition, and headers; import it; then run `metrics status` |
+| You have an official Excel export | Save the needed worksheet locally as CSV UTF-8; the metric importer does not read XLSX |
+| You have no partition table | Search normally with JCR/CAS/JIF hard filters off; report those fields as unavailable |
+| You found a table of unclear origin online | Do not call it official; ask a library or data administrator for a traceable edition |
+| You do not know what your file is | Ask the model to inspect only its notes, sheets, and headers before importing or claiming provenance |
 
-OpenAlex supplies a public source statistic called 2-year mean citedness.
-LitWatch labels it exactly that; it is not Journal Impact Factor.
+### How authorized data is normally obtained
 
-JCR and CAS partitions are supported only through local, authorized CSV import:
+**JCR/JIF:** JCR is a Clarivate subscription product, commonly accessed through
+a university, hospital, research institute, library, or individual entitlement.
+In Browse Journals, select the required edition, category, and filters, then
+export CSV or Excel. Clarivate's current help states that each export contains
+the first 600 sorted records; the JCR application has not offered a full bulk
+download since March 2022. Larger repeatable access requires the institution to
+confirm a separately licensed Web of Science Journals API rather than asking a
+model to assemble a table from the web. See Clarivate's
+[browse/export help](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351400868625-Browsing-Journals),
+[download limits](https://journalcitationreports.zendesk.com/hc/en-gb/articles/28351328522257-Downloading-Information),
+and [Journals API](https://developer.clarivate.com/apis/wos-journal).
 
-    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "YOUR-JCR-FILE.csv" --year 2025
-    python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "YOUR-CAS-FILE.csv" --year 2025
-    python scripts/litwatch.py metrics status --workspace "WORKSPACE"
+**Historical CAS partitions:** The official platform is
+[fenqubiao.com](https://www.fenqubiao.com/). Its
+[help page](https://www.fenqubiao.com/user/Help.aspx) describes institutional,
+CARSI, and personal access and batch-query downloads where permitted. The
+Chinese Academy of Sciences National Science Library has
+[announced](https://www.cssar.cas.cn/library/dtxx/202604/t20260409_8183275.html)
+that it stopped updates from 2026, making **2025 the final official historical
+CAS edition**. Any later third-party ranking must name its real publisher rather
+than being called an official CAS partition.
 
-`--year` is required and names the metric edition, not the papers' publication
-year. The importer accepts long form (one journal/category combination per row)
-and common numbered wide layouts, including `Category_1` /
-`IF Quartile(2025)_1` JCR exports and `ISSN/EISSN` / `大类分区` /
-`小类1分区` CAS tables. Unusual headers can still use `--mapping`.
-If you lawfully possess `JCR2025-UTF8.csv` or `FQBJCR2025-UTF8.csv`, its layout
-is accepted directly; use provider `jcr` for the former and `cas` for the latter.
-These files are **not bundled** with LitWatch.
+If an authorized portal exports Excel, save the relevant worksheet as CSV UTF-8
+inside the authorized local environment. Do not upload a licensed full table to
+an unknown conversion service. A model may inspect headers locally, convert the
+file, and create a `--mapping`; a filename, `--provider jcr/cas`, or web search
+cannot by itself establish authenticity or usage rights.
 
-For a convenient local setup, keep the files inside the runtime workspace, not
-the Git repository, then import them once:
+### What if no table is available?
+
+That is not an error. Discovery, deduplication, ranking, reporting, and lawful
+full-text interpretation still work. Keep `filters.metrics.hard_filter=false`,
+or at least leave all JCR/CAS/JIF requirements disabled. LitWatch may display the
+public `OpenAlex 2-year mean citedness` during online discovery, but it is not JIF
+and cannot be converted to JCR Q1–Q4 or CAS zones 1–4. If a formal partition is
+required, ask the institution's library, research office, or database
+administrator for the needed edition, categories, and permitted export format.
+
+### Where to put the file and how to import it
+
+A metric file may live anywhere the model and CLI can read. For easier local
+management, keep it under the runtime workspace's `local-metrics/`, never in a
+public Git repository:
 
     WORKSPACE/
     └── local-metrics/
         ├── YOUR-JCR-FILE.csv
         └── YOUR-CAS-FILE.csv
 
+Copying the file there has no effect until it is explicitly imported:
+
     python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider jcr --file "WORKSPACE/local-metrics/YOUR-JCR-FILE.csv" --year 2025
     python scripts/litwatch.py metrics import --workspace "WORKSPACE" --provider cas --file "WORKSPACE/local-metrics/YOUR-CAS-FILE.csv" --year 2025
     python scripts/litwatch.py metrics status --workspace "WORKSPACE"
 
-The filenames and JCR year above are examples; replace them with the actual
-file and edition. The final official historical CAS edition is 2025, so do not
-enter a nonexistent official 2026 CAS edition.
+`--year` is the **metric edition**, not a paper's publication year. The JCR year
+and filenames above are examples; replace them with the real edition. There is
+no official 2026 CAS edition. The importer accepts long tables and common wide
+layouts, including JCR `Category_1` / `IF Quartile(2025)_1` and CAS
+`ISSN/EISSN` / `大类分区` / `小类1分区`; unusual headers can use `--mapping`.
+The source CSV is not copied. SQLite stores normalized rows, provider, edition,
+import time, and SHA-256, so retain the original under your own license and
+backup policy.
 
-Or tell a tool-capable model:
+### Three prompts to copy into an AI model
 
-    Use $litwatch with <YOUR_WORKSPACE>. Import <JCR CSV path and edition year>
-    and <CAS CSV path and edition year>, verify them with `metrics status`, and
-    only then apply my requested quartile/JIF/zone filters. Do not infer missing
-    partitions.
+**I have a table:**
+
+    Use $litwatch with <YOUR_WORKSPACE>. I am authorized to use <CSV PATH>
+    locally; it is described as <JCR or historical CAS> <EDITION YEAR>. First
+    inspect its provenance notes, encoding, and headers. Do not treat its name or
+    `--provider` as proof that it is official. Create a local mapping if needed,
+    import it, then run `metrics status` and report the edition, row count, and
+    journal count. Apply <EXACT QUARTILE/JIF/ZONE RULE>, showing provider,
+    edition, category or major/minor scope, and aggregation for each paper. Keep
+    missing or conflicting values as needs review; never infer them.
+
+**I have no table:**
+
+    Use $litwatch with <YOUR_WORKSPACE>. I do not have an authorized JCR or CAS
+    table. Do not download an unverified mirror, guess partitions, or label
+    OpenAlex 2-year mean citedness as JIF. Disable JCR/CAS/JIF hard filters and
+    search by topic relevance; mark those fields unavailable. If you display the
+    OpenAlex metric, keep its full name. Tell me which edition, categories, and
+    export format I should request from my institution's library later.
+
+**I am unsure what my file contains:**
+
+    Use $litwatch, but do not import <FILE PATH> yet. Inspect only the local file
+    type, worksheets, headers, provenance notes, and edition. Explain whether it
+    resembles JCR, historical CAS, or an unknown format and what remains
+    unverified. If it is XLSX, tell me which worksheet should be saved as CSV
+    UTF-8. Do not upload, publish, alter the source, or enable hard filters until
+    I confirm.
 
 ### Why the partition tables are not in this repository
 
-The previous private project copy used full 2025 tables mirrored by the
-[ShowJCR project](https://github.com/hitfyd/ShowJCR). Public availability of a
-mirror is not proof that downstream projects may redistribute the underlying
-data. Clarivate states that wholesale sharing of JCR data outside a subscriber's
-institution is prohibited and that publication may require permission; see its
-[JCR terms-of-use guidance](https://clarivate.com/academia-government/blog/a-quick-refresher-on-journal-citation-reports-use-cases-branding-and-terms-of-use/).
-The ShowJCR code repository's GPL license does not override separate rights in
-Clarivate JCR or CAS partition data. LitWatch therefore ships the importer, not
-those datasets. This keeps the MIT release legally separable and prevents a
-download from silently claiming licensed metrics.
+An earlier private copy used a mirror layout provided by the
+[ShowJCR project](https://github.com/hitfyd/ShowJCR). A downloadable third-party
+repository is not proof of provenance or redistribution rights for the
+underlying metrics, and a code license does not automatically cover its data.
+JCR access, export, API use, and reuse remain subject to Clarivate's current
+subscription and usage terms; historical CAS data has its own access conditions.
+LitWatch therefore ships a local importer, not either dataset, and never asks the
+model to fetch a mirror automatically.
 
-The source CSV is not copied. LitWatch stores normalized rows, provider, metric
-year, import time, and SHA-256 in the workspace database. Multiple categories
-are preserved. Matching prefers ISSN and uses normalized journal name only as a
-fallback. Select an exact imported edition with `jcr.year` and `cas.year`; null
-uses the latest dated import. Setting a year explicitly makes repeated runs
-stable as newer editions are added.
-
-“Which partition?” therefore has no hidden heuristic: JCR uses the imported
-category quartile, while CAS uses the configured `major` or `minor` zone. A
-journal in several categories is aggregated with `worst` by default. With no
-matching imported edition, the partition is unavailable—OpenAlex two-year mean
-citedness is never converted into a JCR or CAS partition. `metrics status` and
-`doctor` make that state visible.
+LitWatch emits labels such as `JCR 2025 Q1` and `CAS 2025 major 1`.
+`--provider jcr` and `--provider cas` select parser layouts, not authenticity.
+When provenance is not verified, say “user-supplied JCR/CAS-format data; official
+source not verified.” Matching prefers ISSN and only falls back to normalized
+journal names. Multi-category journals use `worst` by default. Selecting an
+explicit edition prevents drift after a newer import; without a matching edition
+the partition is unavailable, as shown by `metrics status` and `doctor`.
 
 To enable hard filters, edit WORKSPACE/config.json. Example:
 
@@ -745,19 +847,57 @@ not publish it: it can contain research topics, paper details, and licensed
 journal metrics.
 
     WORKSPACE/
-      config.json
-      litwatch.db
-      reports/
-        20261014T083000.123456Z.json
-        20261014T083000.123456Z.md
-        latest.json
-        latest.md
-        library.csv
+    ├── config.json
+    ├── litwatch.db
+    ├── inputs/                         optional, user-created, never auto-scanned
+    ├── local-metrics/                  optional, user-created, never auto-imported
+    └── reports/                        created after the first saved run
+        ├── 20261015T083000.123456Z.json
+        ├── 20261015T083000.123456Z.md
+        ├── latest.json
+        ├── latest.md
+        ├── library.csv
+        └── accepted_papers.xlsx
 
 SQLite is the source of truth. The `reports/` tree appears only after the first
 saved (non-dry-run) `discover` or `watch`. Reports are timestamped, so a second
-run on the same day cannot erase the first. JSON/Markdown/latest/CSV writes are
-atomic.
+run on the same day cannot erase the first. JSON, Markdown, CSV, and Excel
+writes are atomic.
+
+| File or directory | Meaning and use |
+|---|---|
+| `config.json` | Editable source, discovery, ranking, filtering, and output settings; run `doctor` after changes |
+| `litwatch.db` | SQLite source of truth for seeds, works, aliases, events, runs, cache, and imported metric rows |
+| `litwatch.db-wal`, `litwatch.db-shm` | SQLite sidecars that may appear while the database is open; never edit or delete them during a run |
+| `.litwatch.lock` | Temporary single-writer lock; normally removed on exit, but a crash residue must be inspected before manual removal |
+| `inputs/` | Optional seed-filing convention; files still require an explicit `seed add` |
+| `local-metrics/` | Optional private source-file directory; files still require an explicit `metrics import` |
+| timestamped `.json` | Complete immutable machine-readable result of one saved run; preferred for interpretation and downstream tools |
+| timestamped `.md` | Human-readable summary of that run; abstracts may be shortened |
+| `latest.json`, `latest.md` | Copies of the newest saved run, atomically replaced on each saved run |
+| `library.csv` | Cumulative latest state of all stored works, including accepted, pending, and rejected |
+| `accepted_papers.xlsx` | Cumulative deduplicated Excel view of works accepted at least once; new acceptances append logically and old rows update |
+
+`init` creates only `config.json` and `litwatch.db`. `inputs/` and
+`local-metrics/` are user-created filing conventions; `reports/` appears only
+after the first non-dry-run `discover` or `watch`. It is therefore normal to see
+no workbook or `latest.*` immediately after initialization.
+
+`library.csv` is the cumulative current-state export of every stored paper,
+including pending and rejected records. `accepted_papers.xlsx` is the easier
+Excel view: it contains only papers that have been accepted at least once. New
+accepted papers appear at the bottom in first-acceptance order; a paper already
+present is updated in its existing row instead of duplicated. If a paper later
+becomes pending or rejected, its row remains and `current_status` shows that
+change. The workbook includes identifiers, abstract, screening reasons,
+discovery evidence, journal metrics and partitions, publication-history dates,
+metadata sources, and direct links. Complex source data is retained in the
+rightmost JSON columns.
+
+For safety, LitWatch rebuilds the workbook atomically from SQLite after each
+saved run; this gives append-and-update behavior without editing an XLSX file in
+place. Manual changes to the workbook will therefore be overwritten. Close the
+workbook in Excel before running LitWatch again, because Excel may lock the file.
 
 Deduplication stores all observed strong identifier aliases rather than only a
 preferred DOI. A paper first seen by PMID and later enriched with a DOI stays one
