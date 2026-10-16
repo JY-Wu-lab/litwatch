@@ -35,7 +35,7 @@ from typing import Any, Iterable
 from xml.sax.saxutils import escape as xml_escape, quoteattr
 
 
-VERSION = "2.4.0"
+VERSION = "2.6.0"
 SCHEMA_VERSION = 1
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_METRICS_DIR = ROOT / "bundled-metrics"
@@ -94,6 +94,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pubmed": {
             "enabled": False,
         },
+        "semantic_scholar": {
+            "enabled": False,
+        },
     },
     "profile": {
         "extra_queries": [],
@@ -122,6 +125,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "reference": 0.55,
             "search": 0.55,
             "pubmed_similar": 0.85,
+            "semantic_scholar_recommended": 0.85,
             "refresh": 0.0,
         },
     },
@@ -157,7 +161,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "output": {
-        "include_rejected": True,
+        "include_rejected": False,
         "max_rejected": 100,
     },
 }
@@ -168,6 +172,10 @@ class LitWatchError(RuntimeError):
 
 
 class NotFoundError(LitWatchError):
+    pass
+
+
+class RateLimitError(LitWatchError):
     pass
 
 
@@ -260,9 +268,12 @@ def validate_config(cfg: dict[str, Any]) -> None:
         if not isinstance(discovery[name], int) or isinstance(discovery[name], bool) or discovery[name] < 0:
             raise LitWatchError(f"discovery.{name} must be a non-negative integer")
     discovery_enabled = any(discovery[name] for name in ("related", "references", "citations", "search"))
-    if (discovery_enabled or cfg["sources"]["pubmed"]["enabled"]) and discovery["max_per_channel"] < 1:
+    auxiliary_discovery = any(
+        cfg["sources"][name]["enabled"] for name in ("pubmed", "semantic_scholar")
+    )
+    if (discovery_enabled or auxiliary_discovery) and discovery["max_per_channel"] < 1:
         raise LitWatchError("discovery.max_per_channel must be at least 1 when discovery is enabled")
-    if (discovery_enabled or cfg["sources"]["pubmed"]["enabled"]) and discovery["max_candidates"] < 1:
+    if (discovery_enabled or auxiliary_discovery) and discovery["max_candidates"] < 1:
         raise LitWatchError("discovery.max_candidates must be at least 1 when discovery is enabled")
     if discovery["search"] and discovery["max_seed_queries"] < 1:
         raise LitWatchError("discovery.max_seed_queries must be at least 1 when search is enabled")
@@ -399,6 +410,8 @@ def work_aliases(work: dict[str, Any]) -> set[str]:
     aliases: set[str] = set()
     if work.get("openalex_id"):
         aliases.add("openalex:" + str(work["openalex_id"]).upper())
+    if work.get("semantic_scholar_id"):
+        aliases.add("semantic-scholar:" + str(work["semantic_scholar_id"]).strip().lower())
     if normalize_doi(work.get("doi")):
         aliases.add("doi:" + normalize_doi(work["doi"]))
     if work.get("pmid"):
@@ -627,10 +640,12 @@ class HttpClient:
         self.conn = conn
         self.user_agent = user_agent
         self.cache_write = cache_write
+        self.rate_limited_hosts: dict[str, str] = {}
 
     def get(self, url: str, ttl: int = 86400, headers: dict[str, str] | None = None) -> bytes:
         if not url.startswith("https://"):
             raise LitWatchError(f"Refusing non-HTTPS URL: {url}")
+        host = urllib.parse.urlsplit(url).netloc
         cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
         row = self.conn.execute("SELECT body,fetched_at FROM http_cache WHERE cache_key=?", (cache_key,)).fetchone()
         if row and time.time() - row["fetched_at"] <= ttl:
@@ -638,6 +653,8 @@ class HttpClient:
             if len(body) > MAX_HTTP_RESPONSE_BYTES:
                 raise LitWatchError("Cached HTTP response exceeds the safety limit")
             return body
+        if host in self.rate_limited_hosts:
+            raise RateLimitError(self.rate_limited_hosts[host])
         request_headers = {"User-Agent": self.user_agent, "Accept": "application/json, application/xml;q=0.9, */*;q=0.5"}
         request_headers.update(headers or {})
         last_error: Exception | None = None
@@ -659,16 +676,27 @@ class HttpClient:
                 return body
             except urllib.error.HTTPError as exc:
                 last_error = exc
+                response_headers = exc.headers or {}
                 if exc.code == 404:
-                    raise NotFoundError(f"Resource not found at {urllib.parse.urlsplit(url).netloc}") from exc
+                    raise NotFoundError(f"Resource not found at {host}") from exc
                 if exc.code not in {429, 500, 502, 503, 504}:
                     break
-                delay = self._retry_delay(exc.headers.get("Retry-After"), attempt)
+                if exc.code == 429 and str(response_headers.get("X-RateLimit-Remaining", "")).strip() == "0":
+                    break
+                delay = self._retry_delay(response_headers.get("Retry-After"), attempt)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_error = exc
                 delay = min(20.0, (2 ** attempt) + random.random())
             if attempt < 3:
                 time.sleep(delay)
+        if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 429:
+            response_headers = last_error.headers or {}
+            reset = response_headers.get("X-RateLimit-Reset") or response_headers.get("Retry-After")
+            message = f"Rate limited by {host}"
+            if reset:
+                message += f"; provider reset/retry hint: {reset}"
+            self.rate_limited_hosts[host] = message
+            raise RateLimitError(message) from last_error
         raise LitWatchError(f"Request failed after retries: {type(last_error).__name__}: {last_error}")
 
     @staticmethod
@@ -984,6 +1012,24 @@ class CrossrefClient:
     def __init__(self, http: HttpClient, cfg: dict[str, Any]):
         self.http = http
         self.email = os.getenv("CROSSREF_EMAIL", "")
+        self.messages: dict[str, dict[str, Any] | None] = {}
+
+    def _message(self, doi: str) -> dict[str, Any] | None:
+        if doi in self.messages:
+            return self.messages[doi]
+        params = {"mailto": self.email} if self.email else {}
+        suffix = "?" + urllib.parse.urlencode(params) if params else ""
+        url = f"{self.base}/works/{urllib.parse.quote(doi, safe='')}" + suffix
+        try:
+            payload = self.http.get_json(url, ttl=604800)
+        except NotFoundError:
+            self.messages[doi] = None
+            return None
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(message, dict):
+            raise LitWatchError("Crossref returned an unexpected work response")
+        self.messages[doi] = message
+        return message
 
     def enrich(self, work: dict[str, Any]) -> dict[str, Any]:
         doi = normalize_doi(work.get("doi"))
@@ -991,16 +1037,9 @@ class CrossrefClient:
             return work
         if doi.startswith("10.48550/arxiv."):
             return work
-        params = {"mailto": self.email} if self.email else {}
-        suffix = "?" + urllib.parse.urlencode(params) if params else ""
-        url = f"{self.base}/works/{urllib.parse.quote(doi, safe='')}" + suffix
-        try:
-            payload = self.http.get_json(url, ttl=604800)
-        except NotFoundError:
+        message = self._message(doi)
+        if message is None:
             return work
-        message = payload.get("message") if isinstance(payload, dict) else None
-        if not isinstance(message, dict):
-            raise LitWatchError("Crossref returned an unexpected work response")
         title = " ".join(message.get("title") or []).strip()
         abstract = re.sub(r"<[^>]+>", " ", str(message.get("abstract") or ""))
         issns = [normalize_issn(v) for v in (message.get("ISSN") or [])]
@@ -1091,6 +1130,144 @@ class CrossrefClient:
         }
         return merge_records(work, enriched)
 
+    def references(self, work: dict[str, Any], limit: int) -> tuple[list[dict[str, Any]], bool]:
+        doi = normalize_doi(work.get("doi"))
+        if not doi or limit <= 0:
+            return [], False
+        message = self._message(doi)
+        if message is None:
+            return [], False
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in message.get("reference") or []:
+            if not isinstance(item, dict):
+                continue
+            reference_doi = normalize_doi(item.get("DOI"))
+            title = re.sub(r"\s+", " ", str(item.get("article-title") or "")).strip()
+            if not reference_doi or not title or reference_doi in seen:
+                continue
+            seen.add(reference_doi)
+            year_text = str(item.get("year") or "").strip()
+            year = int(year_text) if re.fullmatch(r"(?:19|20)\d{2}", year_text) else None
+            author = re.sub(r"\s+", " ", str(item.get("author") or "")).strip()
+            records.append({
+                "doi": reference_doi,
+                "title": title,
+                "authors": [author] if author else [],
+                "year": year,
+                "publication_date": "",
+                "type": normalize_document_type(item.get("type")),
+                "is_preprint": None,
+                "is_retracted": False,
+                "journal": re.sub(r"\s+", " ", str(item.get("journal-title") or "")).strip(),
+                "cited_by_count": None,
+                "is_oa": None,
+                "licenses": [],
+                "topics": [],
+                "relation_flags": [],
+                "metadata_sources": ["crossref"],
+            })
+        return records[:limit], len(records) > limit
+
+
+def semantic_scholar_seed_id(work: dict[str, Any]) -> str:
+    doi = normalize_doi(work.get("doi"))
+    if doi:
+        return "DOI:" + doi
+    if str(work.get("pmid") or "").isdigit():
+        return "PMID:" + str(work["pmid"])
+    if work.get("arxiv_id"):
+        return "ARXIV:" + str(work["arxiv_id"])
+    return ""
+
+
+def parse_semantic_scholar_work(raw: dict[str, Any]) -> dict[str, Any]:
+    external = raw.get("externalIds") or {}
+    pdf = raw.get("openAccessPdf") or {}
+    journal = raw.get("journal") or {}
+    publication_types = raw.get("publicationTypes") or []
+    work_type = normalize_document_type(publication_types[0] if publication_types else "")
+    if work_type == "journalarticle":
+        work_type = "article"
+    elif work_type == "conference":
+        work_type = "proceedings-article"
+    publication_date = str(raw.get("publicationDate") or "")
+    try:
+        publication_date = date.fromisoformat(publication_date).isoformat() if publication_date else ""
+    except ValueError:
+        publication_date = ""
+    license_value = normalize_license_id(pdf.get("license"))
+    return {
+        "semantic_scholar_id": str(raw.get("paperId") or ""),
+        "openalex_id": "",
+        "doi": normalize_doi(external.get("DOI")),
+        "pmid": str(external.get("PubMed") or external.get("Medline") or ""),
+        "arxiv_id": str(external.get("ArXiv") or ""),
+        "title": str(raw.get("title") or "").strip(),
+        "abstract": str(raw.get("abstract") or "").strip(),
+        "authors": [str(item.get("name") or "").strip() for item in (raw.get("authors") or []) if item.get("name")],
+        "year": raw.get("year") if isinstance(raw.get("year"), int) else None,
+        "publication_date": publication_date,
+        "type": work_type,
+        "is_preprint": work_type == "preprint",
+        "is_retracted": False,
+        "journal": str(journal.get("name") or raw.get("venue") or "").strip(),
+        "source_id": "",
+        "issn_l": "",
+        "issns": [],
+        "cited_by_count": None,
+        "semantic_scholar_cited_by_count": (
+            raw.get("citationCount") if isinstance(raw.get("citationCount"), int) else None
+        ),
+        "is_oa": raw.get("isOpenAccess") if isinstance(raw.get("isOpenAccess"), bool) else None,
+        "oa_status": str(pdf.get("status") or ""),
+        "primary_url": str(raw.get("url") or ""),
+        "oa_url": str(pdf.get("url") or ""),
+        "oa_pdf_url": str(pdf.get("url") or ""),
+        "licenses": [license_value] if license_value else [],
+        "topics": [str(value) for value in (raw.get("fieldsOfStudy") or []) if value],
+        "referenced_ids": [],
+        "related_ids": [],
+        "relation_flags": [],
+        "metadata_sources": ["semantic_scholar"],
+    }
+
+
+class SemanticScholarClient:
+    base = "https://api.semanticscholar.org/recommendations/v1"
+    fields = (
+        "externalIds,url,title,abstract,venue,year,authors,citationCount,publicationTypes,"
+        "publicationDate,isOpenAccess,openAccessPdf,fieldsOfStudy,journal"
+    )
+
+    def __init__(self, http: HttpClient, cfg: dict[str, Any]):
+        self.http = http
+        self.api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        self.last_request = 0.0
+
+    def recommend(self, work: dict[str, Any], limit: int) -> tuple[list[dict[str, Any]], bool]:
+        identifier = semantic_scholar_seed_id(work)
+        if not identifier or limit <= 0:
+            return [], False
+        params = urllib.parse.urlencode({"limit": min(limit, 500), "fields": self.fields})
+        url = f"{self.base}/papers/forpaper/{urllib.parse.quote(identifier, safe='')}?{params}"
+        headers = {"x-api-key": self.api_key} if self.api_key else None
+        delay = 1.01 - (time.monotonic() - self.last_request)
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            payload = self.http.get_json(url, ttl=604800, headers=headers)
+        except NotFoundError:
+            return [], False
+        finally:
+            self.last_request = time.monotonic()
+        papers = payload.get("recommendedPapers") if isinstance(payload, dict) else None
+        if not isinstance(papers, list):
+            raise LitWatchError("Semantic Scholar returned an unexpected recommendations response")
+        records = [parse_semantic_scholar_work(item) for item in papers if isinstance(item, dict)]
+        records = [item for item in records if item.get("title")]
+        return records[:limit], len(papers) >= min(limit, 500)
+
 
 class PubMedClient:
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -1099,6 +1276,8 @@ class PubMedClient:
         self.http = http
         self.email = os.getenv("NCBI_EMAIL", "")
         self.api_key = os.getenv("NCBI_API_KEY", "")
+        self.last_request = 0.0
+        self.min_interval = 0.11 if self.api_key else 0.34
         if not self.email:
             raise LitWatchError("PubMed is enabled but NCBI_EMAIL is missing")
 
@@ -1109,10 +1288,18 @@ class PubMedClient:
             query["api_key"] = self.api_key
         return f"{self.base}/{endpoint}?{urllib.parse.urlencode(query, doseq=True)}"
 
+    def get(self, url: str) -> bytes:
+        delay = self.min_interval - (time.monotonic() - self.last_request)
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            return self.http.get(url, ttl=604800)
+        finally:
+            self.last_request = time.monotonic()
+
     def similar(self, pmid: str, limit: int) -> tuple[list[str], bool]:
-        body = self.http.get(
+        body = self.get(
             self.url("elink.fcgi", {"dbfrom": "pubmed", "db": "pubmed", "id": pmid, "linkname": "pubmed_pubmed", "cmd": "neighbor_score"}),
-            ttl=604800,
         )
         try:
             root = ET.fromstring(body)
@@ -1130,12 +1317,29 @@ class PubMedClient:
         ids = [identifier for _, identifier in sorted(links, key=lambda item: item[0], reverse=True)]
         return ids[:limit], len(ids) > limit
 
+    def linked(self, pmid: str, linkname: str, limit: int) -> tuple[list[str], bool]:
+        body = self.get(
+            self.url("elink.fcgi", {
+                "dbfrom": "pubmed", "db": "pubmed", "id": pmid,
+                "linkname": linkname, "cmd": "neighbor",
+            }),
+        )
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as exc:
+            raise LitWatchError("PubMed returned malformed XML") from exc
+        ids = [
+            self._node_text(link.find("Id"))
+            for link in root.findall(f".//LinkSetDb[LinkName='{linkname}']/Link")
+        ]
+        ids = list(dict.fromkeys(value for value in ids if value and value != pmid))
+        return ids[:limit], len(ids) > limit
+
     def fetch(self, pmids: list[str]) -> list[dict[str, Any]]:
         if not pmids:
             return []
-        body = self.http.get(
+        body = self.get(
             self.url("efetch.fcgi", {"db": "pubmed", "id": ",".join(pmids), "rettype": "abstract", "retmode": "xml"}),
-            ttl=604800,
         )
         try:
             root = ET.fromstring(body)
@@ -2321,6 +2525,7 @@ def discover_pool(
     }
     max_per = cfg["discovery"]["max_per_channel"]
     oa: OpenAlexClient | None = None
+    crossref = CrossrefClient(http, cfg["sources"]["crossref"]) if cfg["sources"]["crossref"]["enabled"] else None
     resolved_positive: list[dict[str, Any]] = []
     if cfg["sources"]["openalex"]["enabled"]:
         oa = OpenAlexClient(http, cfg["sources"]["openalex"])
@@ -2426,27 +2631,104 @@ def discover_pool(
         resolved_positive = positive
         status["search_complete"] = False
         status["warnings"].append("OpenAlex is disabled; coverage is reduced")
-        if not cfg["sources"]["pubmed"]["enabled"]:
+        if not (
+            cfg["sources"]["pubmed"]["enabled"]
+            or cfg["sources"]["semantic_scholar"]["enabled"]
+            or (crossref and cfg["discovery"]["references"])
+        ):
             status["complete"] = False
+    if crossref and cfg["discovery"]["references"]:
+        for index, seed in enumerate(resolved_positive):
+            if not normalize_doi(seed.get("doi")):
+                continue
+            try:
+                seed = crossref.enrich(seed)
+                resolved_positive[index] = seed
+                works, truncated = crossref.references(seed, max_per)
+                add_channel_results(pool, works, "reference", seed["seed_key"], "crossref", since, until)
+                status["channels"].append({
+                    "source": "crossref", "channel": "reference", "seed": seed["seed_key"],
+                    "count": len(works), "truncated": truncated,
+                })
+                if truncated:
+                    status["bounded"] = True
+                    status["warnings"].append(f"Crossref references reached configured cap for seed {seed['seed_key']}")
+            except LitWatchError as exc:
+                status["complete"] = False
+                status["warnings"].append(f"Crossref references failed for {seed['seed_key']}: {exc}")
+    if cfg["sources"]["semantic_scholar"]["enabled"]:
+        semantic_scholar = SemanticScholarClient(http, cfg["sources"]["semantic_scholar"])
+        eligible_semantic_seeds = [seed for seed in resolved_positive if semantic_scholar_seed_id(seed)]
+        if not eligible_semantic_seeds:
+            status["warnings"].append("Semantic Scholar is enabled, but no positive seed has a DOI, PMID, or arXiv ID")
+        for seed in eligible_semantic_seeds:
+            try:
+                works, truncated = semantic_scholar.recommend(seed, max_per)
+                add_channel_results(
+                    pool, works, "semantic_scholar_recommended", seed["seed_key"],
+                    "semantic_scholar", since, until,
+                )
+                status["channels"].append({
+                    "source": "semantic_scholar", "channel": "recommended", "seed": seed["seed_key"],
+                    "count": len(works), "truncated": truncated,
+                })
+                if truncated:
+                    status["bounded"] = True
+                    status["warnings"].append(
+                        f"Semantic Scholar recommendations reached configured cap for seed {seed['seed_key']}"
+                    )
+            except LitWatchError as exc:
+                status["complete"] = False
+                status["warnings"].append(f"Semantic Scholar failed for {seed['seed_key']}: {exc}")
     if cfg["sources"]["pubmed"]["enabled"]:
         pubmed_seeds = [seed for seed in resolved_positive if seed.get("pmid")]
-        if not pubmed_seeds and not cfg["sources"]["openalex"]["enabled"]:
-            status["complete"] = False
-            status["warnings"].append("PubMed is the only enabled discovery source, but no positive seed has a PMID")
+        if not pubmed_seeds:
+            status["warnings"].append("PubMed is enabled, but no positive seed has a PMID")
+            if not (
+                cfg["sources"]["openalex"]["enabled"]
+                or cfg["sources"]["semantic_scholar"]["enabled"]
+                or (crossref and cfg["discovery"]["references"])
+            ):
+                status["complete"] = False
         try:
             pubmed = PubMedClient(http, cfg["sources"]["pubmed"]) if pubmed_seeds else None
             for seed in pubmed_seeds:
                 assert pubmed is not None
-                ids, truncated = pubmed.similar(str(seed["pmid"]), max_per)
-                works = pubmed.fetch(ids)
-                add_channel_results(pool, works, "pubmed_similar", seed["seed_key"], "pubmed", since, until)
-                status["channels"].append({"source": "pubmed", "channel": "similar", "seed": seed["seed_key"], "count": len(works), "truncated": truncated})
-                if truncated:
-                    status["bounded"] = True
-                    status["warnings"].append(f"PubMed similar results reached configured cap for seed {seed['seed_key']}")
+                channels: list[tuple[str, str, Any]] = [
+                    ("pubmed_similar", "similar", pubmed.similar),
+                ]
+                if cfg["discovery"]["references"]:
+                    channels.append((
+                        "reference", "reference",
+                        lambda pmid, limit: pubmed.linked(pmid, "pubmed_pubmed_refs", limit),
+                    ))
+                if cfg["discovery"]["citations"]:
+                    channels.append((
+                        "citation", "citation",
+                        lambda pmid, limit: pubmed.linked(pmid, "pubmed_pubmed_citedin", limit),
+                    ))
+                for channel, source_channel, lookup in channels:
+                    try:
+                        ids, truncated = lookup(str(seed["pmid"]), max_per)
+                        works = pubmed.fetch(ids)
+                        add_channel_results(pool, works, channel, seed["seed_key"], "pubmed", since, until)
+                        status["channels"].append({
+                            "source": "pubmed", "channel": source_channel, "seed": seed["seed_key"],
+                            "count": len(works), "truncated": truncated,
+                        })
+                        if truncated:
+                            status["bounded"] = True
+                            status["warnings"].append(
+                                f"PubMed {source_channel} results reached configured cap for seed {seed['seed_key']}"
+                            )
+                    except LitWatchError as exc:
+                        status["complete"] = False
+                        status["warnings"].append(
+                            f"PubMed {source_channel} failed for {seed['seed_key']}: {exc}"
+                        )
         except LitWatchError as exc:
             status["complete"] = False
-            status["warnings"].append(f"PubMed failed: {exc}")
+            status["warnings"].append(f"PubMed setup failed: {exc}")
     seed_aliases = set().union(*(work_aliases(seed) for seed in positive + negative))
     for key, work in list(pool.records.items()):
         if work_aliases(work) & seed_aliases:
@@ -2471,8 +2753,7 @@ def discover_pool(
         key=lambda key: rank_candidate(pool.records[key], resolved_positive, negative, pool.provenance.get(key, []), cfg)[0],
         reverse=True,
     )
-    if cfg["sources"]["crossref"]["enabled"]:
-        crossref = CrossrefClient(http, cfg["sources"]["crossref"])
+    if crossref:
         limit = cfg["sources"]["crossref"]["enrich_limit"]
         failures = 0
         lifecycle_eligible = [key for key in pool.lifecycle if pool.records[key].get("doi")]
@@ -2622,6 +2903,11 @@ def lifecycle_events(old: dict[str, Any] | None, new: dict[str, Any], old_status
     return list(unique.values())
 
 
+def event_signature(work_key: str, event: dict[str, Any]) -> str:
+    value = {"work_key": work_key, "kind": event["kind"], "details": event["details"]}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
 def upsert_result(conn: sqlite3.Connection, result: dict[str, Any], now: str) -> dict[str, Any]:
     incoming = dict(result["work"])
     if not result.get("lifecycle_refresh"):
@@ -2676,8 +2962,7 @@ def upsert_result(conn: sqlite3.Connection, result: dict[str, Any], now: str) ->
         conn.execute("INSERT OR REPLACE INTO aliases(alias,work_key) VALUES(?,?)", (alias, winner))
     stored_events: list[dict[str, Any]] = []
     for event in events:
-        signature_input = {"work_key": winner, "kind": event["kind"], "details": event["details"]}
-        signature = hashlib.sha256(json.dumps(signature_input, sort_keys=True).encode()).hexdigest()
+        signature = event_signature(winner, event)
         before = conn.total_changes
         conn.execute(
             "INSERT OR IGNORE INTO events(work_key,kind,signature,event_at,details_json) VALUES(?,?,?,?,?)",
@@ -2690,6 +2975,37 @@ def upsert_result(conn: sqlite3.Connection, result: dict[str, Any], now: str) ->
     return output
 
 
+def preview_upsert_result(conn: sqlite3.Connection, result: dict[str, Any]) -> dict[str, Any]:
+    incoming = dict(result["work"])
+    if not result.get("lifecycle_refresh"):
+        incoming["discovery_provenance"] = result.get("provenance") or []
+        incoming["discovery_score_breakdown"] = result.get("score_breakdown") or {}
+    existing_keys = find_existing_keys(conn, work_aliases(incoming))
+    lifecycle_key = str(result.get("lifecycle_work_key") or "") if result.get("lifecycle_refresh") else ""
+    if lifecycle_key and conn.execute("SELECT 1 FROM works WHERE work_key=?", (lifecycle_key,)).fetchone():
+        existing_keys = [lifecycle_key] + [key for key in existing_keys if key != lifecycle_key]
+    winner = existing_keys[0] if existing_keys else canonical_work_key(incoming)
+    row = conn.execute(
+        "SELECT record_json,status FROM works WHERE work_key=?", (winner,)
+    ).fetchone()
+    old = json.loads(row["record_json"]) if row else None
+    old_status = row["status"] if row else None
+    merged = merge_records(old or {}, incoming)
+    for loser in existing_keys[1:]:
+        loser_row = conn.execute("SELECT record_json FROM works WHERE work_key=?", (loser,)).fetchone()
+        if loser_row:
+            merged = merge_records(json.loads(loser_row[0]), merged)
+    events = [
+        event for event in lifecycle_events(old, merged, old_status, result["status"])
+        if not conn.execute(
+            "SELECT 1 FROM events WHERE signature=?", (event_signature(winner, event),)
+        ).fetchone()
+    ]
+    output = dict(result)
+    output.update({"work_key": winner, "work": merged, "is_new": old is None, "events": events})
+    return output
+
+
 def paper_url(work: dict[str, Any]) -> str:
     if normalize_doi(work.get("doi")):
         return "https://doi.org/" + urllib.parse.quote(normalize_doi(work["doi"]), safe="/()")
@@ -2699,6 +3015,8 @@ def paper_url(work: dict[str, Any]) -> str:
         return "https://arxiv.org/abs/" + urllib.parse.quote(str(work["arxiv_id"]), safe="/")
     if work.get("openalex_id"):
         return "https://openalex.org/" + urllib.parse.quote(str(work["openalex_id"]))
+    if work.get("semantic_scholar_id"):
+        return "https://www.semanticscholar.org/paper/" + urllib.parse.quote(str(work["semantic_scholar_id"]))
     return ""
 
 
@@ -2720,6 +3038,7 @@ def paper_links(work: dict[str, Any]) -> dict[str, str]:
     pmid = str(work.get("pmid") or "").strip()
     arxiv_id = str(work.get("arxiv_id") or "").strip()
     openalex_id = str(work.get("openalex_id") or "").strip().upper()
+    semantic_scholar_id = str(work.get("semantic_scholar_id") or "").strip()
     return {
         "doi": "https://doi.org/" + urllib.parse.quote(doi, safe="/()") if doi else "",
         "publisher": safe_https_url(work.get("publisher_url")),
@@ -2729,6 +3048,10 @@ def paper_links(work: dict[str, Any]) -> dict[str, str]:
         "pubmed": "https://pubmed.ncbi.nlm.nih.gov/" + urllib.parse.quote(pmid) + "/" if pmid.isdigit() else "",
         "arxiv": "https://arxiv.org/abs/" + urllib.parse.quote(arxiv_id, safe="/") if arxiv_id else "",
         "openalex": "https://openalex.org/" + urllib.parse.quote(openalex_id) if OA_RE.fullmatch(openalex_id) else "",
+        "semantic_scholar": (
+            "https://www.semanticscholar.org/paper/" + urllib.parse.quote(semantic_scholar_id)
+            if semantic_scholar_id else ""
+        ),
     }
 
 
@@ -2792,6 +3115,7 @@ def report_record(item: dict[str, Any]) -> dict[str, Any]:
         "pmid": work.get("pmid"),
         "arxiv_id": work.get("arxiv_id"),
         "openalex_id": work.get("openalex_id"),
+        "semantic_scholar_id": work.get("semantic_scholar_id"),
         "url": paper_url(work),
         "links": links,
         "cited_by_count": work.get("cited_by_count"),
@@ -2845,7 +3169,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             link_labels = {
                 "doi": "DOI", "publisher": "Publisher", "primary": "Primary",
                 "open_access": "Open access", "pdf": "PDF", "pubmed": "PubMed",
-                "arxiv": "arXiv", "openalex": "OpenAlex",
+                "arxiv": "arXiv", "openalex": "OpenAlex", "semantic_scholar": "Semantic Scholar",
             }
             direct_links: list[str] = []
             seen_links: set[str] = set()
@@ -2886,7 +3210,7 @@ def rebuild_library_csv(conn: sqlite3.Connection, path: Path) -> None:
     ).fetchall()
     headers = [
         "work_key", "status", "score", "title", "authors", "year", "publication_date", "journal",
-        "doi", "pmid", "arxiv_id", "openalex_id", "cited_by_count", "is_preprint", "is_retracted",
+        "doi", "pmid", "arxiv_id", "openalex_id", "semantic_scholar_id", "cited_by_count", "is_preprint", "is_retracted",
         "submitted_date", "received_date", "revised_dates", "accepted_date", "published_online_date",
         "published_print_date", "posted_date", "open_access", "metrics", "reasons", "first_seen", "last_seen",
         "url", "publisher_url", "primary_url", "oa_url", "pdf_url",
@@ -2913,6 +3237,7 @@ def rebuild_library_csv(conn: sqlite3.Connection, path: Path) -> None:
                     "pmid": work.get("pmid"),
                     "arxiv_id": work.get("arxiv_id"),
                     "openalex_id": work.get("openalex_id"),
+                    "semantic_scholar_id": work.get("semantic_scholar_id"),
                     "cited_by_count": work.get("cited_by_count"),
                     "is_preprint": bool(work.get("is_preprint")),
                     "is_retracted": bool(work.get("is_retracted")),
@@ -3026,6 +3351,7 @@ def rebuild_accepted_xlsx(conn: sqlite3.Connection, path: Path) -> None:
         ("pmid", 14, "text"),
         ("arxiv_id", 18, "text"),
         ("openalex_id", 16, "text"),
+        ("semantic_scholar_id", 22, "text"),
         ("cited_by_count", 12, "integer"),
         ("is_preprint", 11, "boolean"),
         ("is_retracted", 11, "boolean"),
@@ -3090,6 +3416,7 @@ def rebuild_accepted_xlsx(conn: sqlite3.Connection, path: Path) -> None:
             "pmid": work.get("pmid"),
             "arxiv_id": work.get("arxiv_id"),
             "openalex_id": work.get("openalex_id"),
+            "semantic_scholar_id": work.get("semantic_scholar_id"),
             "cited_by_count": work.get("cited_by_count"),
             "is_preprint": bool(work.get("is_preprint")),
             "is_retracted": bool(work.get("is_retracted")),
@@ -3259,6 +3586,31 @@ def rebuild_accepted_xlsx(conn: sqlite3.Connection, path: Path) -> None:
         raise
 
 
+def reportable_results(
+    stored: list[dict[str, Any]], mode: str, cfg: dict[str, Any]
+) -> list[dict[str, Any]]:
+    selected = (
+        [item for item in stored if item["is_new"] or any(event["kind"] != "discovered" for event in item["events"])]
+        if mode == "watch" else list(stored)
+    )
+    if not cfg["output"]["include_rejected"]:
+        return [
+            item
+            for item in selected
+            if item["status"] != "rejected"
+            or any(event["kind"] != "discovered" for event in item["events"])
+        ]
+    remaining_rejected = cfg["output"]["max_rejected"]
+    output: list[dict[str, Any]] = []
+    for item in selected:
+        if item["status"] == "rejected":
+            if remaining_rejected <= 0:
+                continue
+            remaining_rejected -= 1
+        output.append(item)
+    return output
+
+
 def save_run(
     conn: sqlite3.Connection,
     workspace: Path,
@@ -3269,19 +3621,13 @@ def save_run(
     cfg: dict[str, Any],
 ) -> tuple[dict[str, Any], Path]:
     now = iso_now()
-    run_id = utcnow().strftime("%Y%m%dT%H%M%S.%fZ")
+    run_id = utcnow().strftime("%Y-%m-%d_%H-%M-%S.%fZ") + f"_{mode}"
     with conn:
         stored = [upsert_result(conn, result, now) for result in evaluated]
-        if mode == "watch":
-            notified = [item for item in stored if item["is_new"] or any(e["kind"] != "discovered" for e in item["events"])]
-        else:
-            notified = stored
-        if not cfg["output"]["include_rejected"]:
-            notified = [item for item in notified if item["status"] != "rejected"]
-        rejected = [item for item in notified if item["status"] == "rejected"][: cfg["output"]["max_rejected"]]
+        notified = reportable_results(stored, mode, cfg)
         accepted = [report_record(item) for item in notified if item["status"] == "accepted"]
         pending = [report_record(item) for item in notified if item["status"] == "pending"]
-        rejected_records = [report_record(item) for item in rejected]
+        rejected_records = [report_record(item) for item in notified if item["status"] == "rejected"]
         report = {
             "schema_version": 1,
             "run_id": run_id,
@@ -3356,6 +3702,29 @@ def dry_run_report(mode: str, evaluated: list[dict[str, Any]], source_status: di
         "accepted": accepted,
         "pending": pending,
         "rejected": rejected,
+    }
+
+
+def compact_preview(report: dict[str, Any], evaluated: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        key: report[key]
+        for key in (
+            "schema_version", "run_id", "mode", "complete", "bounded",
+            "warnings", "source_status", "counts",
+        )
+    } | {
+        "top_results": [
+            {
+                "status": item["status"],
+                "score": item["score"],
+                "title": item["work"].get("title"),
+                "year": item["work"].get("year"),
+                "doi": item["work"].get("doi"),
+                "reasons": item["reasons"],
+            }
+            for item in evaluated[:10]
+        ],
+        "note": "Compact preview only; omit --summary to print every result. No files were saved.",
     }
 
 
@@ -3537,8 +3906,13 @@ def command_discover(args: argparse.Namespace, mode: str) -> int:
         pool, positive, negative, source_status = discover_pool(conn, cfg, mode, since, until, bool(args.dry_run))
         evaluated = evaluate_pool(conn, pool, positive, negative, cfg)
         if args.dry_run:
-            report = dry_run_report(mode, evaluated, source_status)
-            print(json.dumps(report, ensure_ascii=False, indent=2))
+            previewed = (
+                reportable_results([preview_upsert_result(conn, item) for item in evaluated], mode, cfg)
+                if mode == "watch" else evaluated
+            )
+            report = dry_run_report(mode, previewed, source_status)
+            report["counts"]["evaluated"] = len(evaluated)
+            print(json.dumps(compact_preview(report, previewed) if args.summary else report, ensure_ascii=False, indent=2))
         else:
             report, path = save_run(conn, workspace, mode, evaluated, source_status, until, cfg)
             print(json.dumps({"report": str(path), "complete": report["complete"], "counts": report["counts"], "warnings": report["warnings"]}, ensure_ascii=False, indent=2))
@@ -3705,6 +4079,23 @@ def command_doctor(args: argparse.Namespace) -> int:
             except LitWatchError as exc:
                 checks.append({"name": "pubmed_network", "ok": False, "detail": str(exc)})
                 ok = False
+        if cfg["sources"]["semantic_scholar"]["enabled"]:
+            try:
+                api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+                headers = {"x-api-key": api_key} if api_key else None
+                query = urllib.parse.urlencode({"query": "literature", "limit": 1, "fields": "title"})
+                payload = http.get_json(
+                    f"https://api.semanticscholar.org/graph/v1/paper/search?{query}",
+                    ttl=0,
+                    headers=headers,
+                )
+                good = isinstance(payload, dict) and isinstance(payload.get("data"), list)
+                detail = ("reachable with API key" if api_key else "reachable anonymously") if good else "unexpected response"
+                checks.append({"name": "semantic_scholar_network", "ok": good, "detail": detail})
+                ok = ok and good
+            except LitWatchError as exc:
+                checks.append({"name": "semantic_scholar_network", "ok": False, "detail": str(exc)})
+                ok = False
     conn.close()
     print(json.dumps({"ok": ok, "workspace": str(workspace), "checks": checks}, ensure_ascii=False, indent=2))
     return 0 if ok else 1
@@ -3719,6 +4110,7 @@ def add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--since", help="Earliest publication date, YYYY-MM-DD")
     parser.add_argument("--until", help="Latest publication date, YYYY-MM-DD; default today; future dates are rejected")
     parser.add_argument("--dry-run", action="store_true", help="Read and fetch only; do not change workspace state or reports")
+    parser.add_argument("--summary", action="store_true", help="For a dry run, print counts and the top 10 results instead of every record")
     parser.add_argument("--explain", action="store_true", help="Print top ranking components to stderr")
 
 

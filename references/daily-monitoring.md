@@ -25,7 +25,15 @@ is enabled” merely because a command or prompt was printed.
 3. Establish a baseline before scheduling: initialize, add seeds, run a dry
    discovery for review, then complete one saved `discover`. Reuse the same
    workspace, Python interpreter, Skill checkout, config, and credentials later.
-4. Run `doctor --network` and one manual `watch --dry-run` as a preflight.
+   For resilient biomedical monitoring, enable PubMed before scheduling and keep
+   PMIDs plus `NCBI_EMAIL`; optionally enable Semantic Scholar with an API key.
+   Crossref DOI references are already enabled by default. An OpenAlex 429 still
+   makes that run incomplete even when these routes return useful candidates.
+4. Run `doctor --network` and one manual `watch --dry-run --summary` as a
+   readable preflight.
+
+The dry-run watch predicts the new papers and meaningful lifecycle/status
+changes that a saved watch would report, but does not update history or files.
 5. Create a recurring task only after explicit authorization. Prefer the host's
    native recurring automation when it can run tools and deliver results. If it
    cannot, configure cron, Windows Task Scheduler, or another user-approved
@@ -59,12 +67,12 @@ placeholder:
     writing a report. Reserve `doctor --network` for setup, periodic maintenance,
     or troubleshooting rather than doubling every daily network check.
 
-    If exit code is 3 or `complete=false`, notify me that source coverage was
+    If exit code is 3 or `complete=false`, report that source coverage was
     incomplete and include the warnings; do not call it “no new papers”. If
     `bounded=true`, disclose that configured caps were reached. On success,
     report new accepted papers and publication, correction, concern, or
-    retraction events. Include pending papers only when they need my review.
-    Stay quiet when there is no meaningful change unless I requested a daily
+    retraction events. Include pending papers only when human review is required.
+    Stay quiet when there is no meaningful change unless the task requests a daily
     heartbeat. If new accepted papers pass the identity, relevance, retraction,
     and readable-full-text gates, deeply interpret at most three in the delivered
     message; otherwise do not pad the count. Include sourced manuscript-history

@@ -3,7 +3,7 @@ name: litwatch
 description: Discover, deduplicate, rank, monitor, and deeply interpret scholarly literature from seed papers, identifiers, local reference files, or existing LitWatch reports. Use for paper search, papersearch, related-paper discovery, citation snowballing, one-off or scheduled daily literature watches, evidence-grounded reading of discovered papers, preprint/publication tracking, and optional journal-metric annotation or filtering; also trigger for “找相关论文”, “论文精读”, “文献解读”, “每天追踪文献”, “每日文献监测”, “文献追踪”, and “引用网络”. Do not use for a standalone summary of a supplied paper when no LitWatch discovery, report, or monitoring context is involved.
 license: See LICENSE and THIRD_PARTY_NOTICES.md
 metadata:
-  version: "2.4.0"
+  version: "2.6.0"
   schema-version: "1"
 ---
 
@@ -58,8 +58,23 @@ with its absolute path.
    genuinely unwanted topic or concept.
 4. Run a dry baseline first, inspect accepted/pending/rejected reasons, then save:
 
-       python scripts/litwatch.py discover --workspace WORKSPACE --dry-run --explain
+       python scripts/litwatch.py discover --workspace WORKSPACE --dry-run --summary --explain
        python scripts/litwatch.py discover --workspace WORKSPACE
+
+   `--summary` keeps the preview readable by printing counts and the top ten
+   candidates. Omit it only when the task requires every dry-run
+   record in stdout.
+
+   For a resilient daily watch, configure backup sources before scheduling.
+   Crossref DOI references run when Crossref and `discovery.references` are
+   enabled. For biomedical seeds with PMIDs, enable PubMed and set `NCBI_EMAIL`;
+   it supplies Similar Articles plus available PubMed/PMC reference and citing
+   links. Semantic Scholar recommendations are optional, default off, and use
+   `SEMANTIC_SCHOLAR_API_KEY` when available. If OpenAlex returns 429, the CLI
+   stops repeatedly calling that host, continues enabled alternatives, and
+   leaves `complete=false`; never reinterpret that run as “no papers”. Read
+   [sources-and-ranking.md](references/sources-and-ranking.md) before changing
+   source coverage. OpenAlex's website uses the same API and is not a fallback.
 
    If the user requests JCR, CAS, or JIF screening, run `metrics status` first.
    A normal `init` already loads the bundled 2025 editions. Read
@@ -108,7 +123,8 @@ with its absolute path.
    invoke `watch`. Do not claim that a schedule exists unless its creation was
    verified. Do not pass a fixed `--since` on routine scheduled runs.
 6. Summarize results in the user's language. Preserve relationship labels
-   (`reference`, `citation`, `related`, `search`, `pubmed_similar`) and the
+   (`reference`, `citation`, `related`, `search`, `pubmed_similar`,
+   `semantic_scholar_recommended`) and the
    accepted/pending/rejected distinction. Call preprints unreviewed when known.
 7. When the user requests explanation, deep reading, critical appraisal, or a
    cross-paper synthesis, read [interpretation.md](references/interpretation.md)
@@ -141,8 +157,12 @@ with its absolute path.
   but never paywall/login/CAPTCHA bypass, purchase, or bulk redistribution.
   Do not install a scheduler, send notifications, or mutate external systems
   unless the user separately asks for that action.
-- Do not scrape Google Scholar, CNKI, or Wanfang. The default core is OpenAlex;
-  Crossref enriches metadata, and PubMed is optional.
+- Do not scrape Google Scholar, CNKI, Wanfang, Connected Papers, or Litmaps.
+  The default core is OpenAlex plus Crossref DOI metadata/high-confidence
+  backward references; PubMed and Semantic Scholar recommendations are
+  optional. Crossref REST exposes deposited references and a cited-by count,
+  not a general list of citing works. Manual graph tools may supply identifiers
+  that the user then explicitly imports as seeds.
 - The bundled JCR/CAS 2025 files are third-party ShowJCR snapshots, not official
   certification. Keep their provider, edition, and provenance visible. Never
   call OpenAlex two-year mean citedness “JIF” or infer individual-paper quality

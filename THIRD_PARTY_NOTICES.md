@@ -12,9 +12,10 @@ whose repository license is GPL-3.0. The files retain those upstream terms;
 the license text is in `bundled-metrics/COPYING.GPL-3.0`, and exact hashes and
 source-row counts are recorded in `bundled-metrics/README.md`.
 
-Live discovery can contact OpenAlex, Crossref, and optionally PubMed. Their
-data and APIs remain governed by their own terms. Users are responsible for
-rate limits, attribution, privacy, and downstream rights.
+Live discovery can contact OpenAlex, Crossref, and optionally PubMed and
+Semantic Scholar. Their data and APIs remain governed by their own terms.
+Users are responsible for rate limits, attribution, privacy, and downstream
+rights.
 
 `init` verifies the bundled files, then stores normalized rows in the user's
 workspace database. A ShowJCR snapshot is not an official export or an

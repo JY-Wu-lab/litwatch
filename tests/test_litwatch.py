@@ -139,6 +139,25 @@ class HelpersTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_http_daily_rate_limit_short_circuits_the_host(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        lw.init_schema(conn)
+        try:
+            client = lw.HttpClient(conn, "test", cache_write=False)
+            error = lw.urllib.error.HTTPError(
+                "https://api.openalex.org/works", 429, "Too Many Requests",
+                {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "3600"}, None,
+            )
+            with patch.object(lw.urllib.request, "urlopen", side_effect=error) as mocked:
+                with self.assertRaises(lw.RateLimitError):
+                    client.get("https://api.openalex.org/works")
+                with self.assertRaises(lw.RateLimitError):
+                    client.get("https://api.openalex.org/sources")
+            self.assertEqual(mocked.call_count, 1)
+        finally:
+            conn.close()
+
     def test_merge_preserves_false_published_state(self):
         merged = lw.merge_records(
             {"is_preprint": True, "metadata_sources": ["openalex"]},
@@ -293,6 +312,19 @@ class HelpersTest(unittest.TestCase):
         )
         self.assertIn("preprint — not peer reviewed", lw.render_markdown(report))
 
+    def test_compact_preview_keeps_status_and_limits_results(self):
+        evaluated = [result(work(title=f"Paper {index}"), score=90 - index) for index in range(12)]
+        report = lw.dry_run_report(
+            "discover", evaluated,
+            {"complete": False, "bounded": True, "warnings": ["limited"], "channels": []},
+        )
+        preview = lw.compact_preview(report, evaluated)
+        self.assertEqual(preview["counts"]["evaluated"], 12)
+        self.assertEqual(len(preview["top_results"]), 10)
+        self.assertEqual(preview["top_results"][0]["title"], "Paper 0")
+        self.assertNotIn("accepted", preview)
+        self.assertFalse(preview["complete"])
+
     def test_crossref_not_found_is_missing_metadata_not_source_failure(self):
         class MissingHttp:
             def get_json(self, *args, **kwargs):
@@ -349,6 +381,52 @@ class HelpersTest(unittest.TestCase):
         }), {}).enrich(work(doi="10.1234/clinical"))
         self.assertNotIn("retraction", clinical["relation_flags"])
 
+    def test_crossref_references_require_both_doi_and_title(self):
+        class StaticHttp:
+            def get_json(self, *args, **kwargs):
+                return {"message": {"reference": [
+                    {"DOI": "10.1234/GOOD", "article-title": "Useful predecessor", "year": "2022"},
+                    {"DOI": "10.1234/no-title"},
+                    {"article-title": "No identifier"},
+                ]}}
+
+        client = lw.CrossrefClient(StaticHttp(), {})
+        references, truncated = client.references(work(doi="10.1234/seed"), 10)
+        self.assertFalse(truncated)
+        self.assertEqual([(item["doi"], item["title"]) for item in references], [
+            ("10.1234/good", "Useful predecessor"),
+        ])
+
+    def test_semantic_scholar_recommendations_parse_and_use_api_key(self):
+        class StaticHttp:
+            def __init__(self):
+                self.url = ""
+                self.headers = None
+
+            def get_json(self, url, **kwargs):
+                self.url = url
+                self.headers = kwargs.get("headers")
+                return {"recommendedPapers": [{
+                    "paperId": "abc123", "title": "Recommended paper", "year": 2024,
+                    "externalIds": {"DOI": "10.1234/REC", "PubMed": "42"},
+                    "authors": [{"name": "A. Author"}], "citationCount": 7,
+                    "publicationTypes": ["JournalArticle"], "publicationDate": "2024-02-03",
+                    "isOpenAccess": True,
+                    "openAccessPdf": {"url": "https://example.org/paper.pdf", "license": "CC BY"},
+                }]}
+
+        http = StaticHttp()
+        with patch.dict(os.environ, {"SEMANTIC_SCHOLAR_API_KEY": "secret"}):
+            records, truncated = lw.SemanticScholarClient(http, {}).recommend(
+                work(doi="10.1234/seed"), 10
+            )
+        self.assertFalse(truncated)
+        self.assertIn("DOI%3A10.1234%2Fseed", http.url)
+        self.assertEqual(http.headers, {"x-api-key": "secret"})
+        self.assertEqual(records[0]["doi"], "10.1234/rec")
+        self.assertEqual(records[0]["type"], "article")
+        self.assertEqual(records[0]["semantic_scholar_id"], "abc123")
+
     def test_pubmed_dates_issns_oa_and_neighbor_scores(self):
         xml = ET.fromstring(
             """<PubmedArticle><MedlineCitation><PMID>7</PMID><Article>
@@ -395,6 +473,13 @@ class HelpersTest(unittest.TestCase):
             ids, _ = link_client.similar("1", 10)
         self.assertEqual(ids, ["3", "2"])
         self.assertEqual(parse_qs(urlparse(link_http.url).query)["cmd"], ["neighbor_score"])
+
+        link_http = LinkHttp()
+        link_http.get = lambda url, **kwargs: b"<eLinkResult><LinkSet><LinkSetDb><LinkName>pubmed_pubmed_citedin</LinkName><Link><Id>9</Id></Link></LinkSetDb></LinkSet></eLinkResult>"
+        with patch.dict(os.environ, {"NCBI_EMAIL": "test@example.org"}):
+            linked_client = lw.PubMedClient(link_http, {})
+            ids, _ = linked_client.linked("1", "pubmed_pubmed_citedin", 10)
+        self.assertEqual(ids, ["9"])
 
 
 class RankingAndFilterTest(unittest.TestCase):
@@ -659,6 +744,46 @@ class StateTest(unittest.TestCase):
         self.assertIn("correction", {event["kind"] for event in once["events"]})
         self.assertNotIn("correction", {event["kind"] for event in twice["events"]})
 
+    def test_watch_preview_reports_only_new_or_changed_without_writing(self):
+        stable = work(title="Already seen", doi="10.1/stable", openalex_id="WSTABLE")
+        changing = work(title="Now corrected", doi="10.1/changing", openalex_id="WCHANGING")
+        retracted = work(title="Now retracted", doi="10.1/retracted", openalex_id="WRETRACTED")
+        lw.upsert_result(self.conn, result(stable, status="pending"), "2026-01-01T00:00:00Z")
+        lw.upsert_result(self.conn, result(changing, status="pending"), "2026-01-01T00:00:00Z")
+        lw.upsert_result(self.conn, result(retracted), "2026-01-01T00:00:00Z")
+        before = tuple(
+            self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("works", "events")
+        )
+        evaluated = [
+            result(stable, status="pending"),
+            result({**changing, "relation_flags": ["correction"]}, status="pending"),
+            result(
+                work(title="Brand new", doi="10.1/new", openalex_id="WNEW"),
+                status="accepted",
+            ),
+            result({**retracted, "is_retracted": True}, status="rejected"),
+            result(
+                work(title="Routine rejection", doi="10.1/rejected", openalex_id="WREJECTED"),
+                status="rejected",
+            ),
+        ]
+        previewed = [lw.preview_upsert_result(self.conn, item) for item in evaluated]
+        notified = lw.reportable_results(previewed, "watch", deepcopy(lw.DEFAULT_CONFIG))
+        self.assertEqual(
+            {item["work"]["title"] for item in notified},
+            {"Now corrected", "Brand new", "Now retracted"},
+        )
+        corrected = next(item for item in notified if item["work"]["title"] == "Now corrected")
+        self.assertEqual({event["kind"] for event in corrected["events"]}, {"correction"})
+        retraction = next(item for item in notified if item["work"]["title"] == "Now retracted")
+        self.assertEqual({event["kind"] for event in retraction["events"]}, {"retraction"})
+        after = tuple(
+            self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("works", "events")
+        )
+        self.assertEqual(after, before)
+
     def test_excel_library_accumulates_only_ever_accepted_unique_papers(self):
         cfg = deepcopy(lw.DEFAULT_CONFIG)
         source = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_complete": True}
@@ -775,12 +900,92 @@ class StateTest(unittest.TestCase):
         self.assertFalse(status["complete"])
         self.assertTrue(any("no positive seed has a PMID" in warning for warning in status["warnings"]))
 
+    def test_crossref_references_keep_discovery_running_without_openalex(self):
+        seed = work(doi="10.1234/seed", pmid="", openalex_id="", title="Seed topic")
+        self.conn.execute(
+            "INSERT INTO seeds(seed_key,polarity,input_label,work_json,added_at) VALUES(?,?,?,?,?)",
+            (lw.canonical_work_key(seed), "positive", "fixture", json.dumps(seed), lw.iso_now()),
+        )
+
+        class FakeCrossref:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def enrich(self, record):
+                return record
+
+            def references(self, record, limit):
+                return [work(
+                    doi="10.1234/reference", pmid="", openalex_id="",
+                    title="Seed topic predecessor", metadata_sources=["crossref"],
+                )], False
+
+        cfg = deepcopy(lw.DEFAULT_CONFIG)
+        cfg["sources"]["openalex"]["enabled"] = False
+        with patch.object(lw, "CrossrefClient", FakeCrossref):
+            pool, _, _, status = lw.discover_pool(
+                self.conn, cfg, "discover", None, lw.date.today(), True
+            )
+        self.assertTrue(status["complete"])
+        self.assertEqual(len(pool.records), 1)
+        self.assertEqual(next(iter(pool.provenance.values()))[0]["source"], "crossref")
+
+    def test_openalex_429_still_returns_crossref_candidates(self):
+        seed = work(doi="10.1234/seed", pmid="", openalex_id="", title="Seed topic")
+        self.conn.execute(
+            "INSERT INTO seeds(seed_key,polarity,input_label,work_json,added_at) VALUES(?,?,?,?,?)",
+            (lw.canonical_work_key(seed), "positive", "fixture", json.dumps(seed), lw.iso_now()),
+        )
+
+        class RateLimitedOpenAlex:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def resolve(self, record):
+                raise lw.RateLimitError("OpenAlex daily quota exhausted")
+
+            def search(self, query, since, until, limit):
+                raise lw.RateLimitError("OpenAlex daily quota exhausted")
+
+            def source_metrics(self, source_ids):
+                raise lw.RateLimitError("OpenAlex daily quota exhausted")
+
+        class WorkingCrossref:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def enrich(self, record):
+                return record
+
+            def references(self, record, limit):
+                return [work(
+                    doi="10.1234/fallback", pmid="", openalex_id="",
+                    title="Seed topic fallback", metadata_sources=["crossref"],
+                )], False
+
+        with (
+            patch.object(lw, "OpenAlexClient", RateLimitedOpenAlex),
+            patch.object(lw, "CrossrefClient", WorkingCrossref),
+        ):
+            pool, _, _, status = lw.discover_pool(
+                self.conn, deepcopy(lw.DEFAULT_CONFIG), "discover", None, lw.date.today(), True
+            )
+
+        self.assertFalse(status["complete"])
+        self.assertEqual(len(pool.records), 1)
+        self.assertEqual(next(iter(pool.provenance.values()))[0]["source"], "crossref")
+        self.assertTrue(any("daily quota exhausted" in warning for warning in status["warnings"]))
+
     def test_two_runs_do_not_overwrite(self):
         cfg = deepcopy(lw.DEFAULT_CONFIG)
         source = {"complete": True, "bounded": False, "warnings": [], "channels": [], "search_complete": True}
         _, first = lw.save_run(self.conn, self.root, "discover", [result()], source, lw.date(2026, 1, 1), cfg)
         _, second = lw.save_run(self.conn, self.root, "discover", [result()], source, lw.date(2026, 1, 1), cfg)
         self.assertNotEqual(first, second)
+        self.assertRegex(
+            first.name,
+            r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{6}Z_discover\.json$",
+        )
         self.assertTrue(first.exists() and second.exists())
 
     def test_metric_import_preserves_categories(self):

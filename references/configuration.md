@@ -27,19 +27,46 @@ enabled metadata API for resolution.
 
 - OpenAlex is the default discovery graph and metadata source.
 - Crossref is enabled for DOI metadata, license fields, version relations,
-  corrections, and retractions. Limit enrichment with enrich_limit.
-- PubMed is optional. When enabled, set NCBI_EMAIL to a real contact address;
-  NCBI_API_KEY is optional.
+  corrections, retractions, and deposited backward references. A reference is
+  admitted only when Crossref supplies both DOI and title. Limit candidate
+  enrichment with enrich_limit. Crossref REST supplies a cited-by count, not a
+  general citing-paper list.
+- PubMed is optional and intended for biomedical seeds with PMIDs. When enabled,
+  it adds Similar Articles plus available PubMed/PMC reference and citing links.
+  Set NCBI_EMAIL to a real contact address; NCBI_API_KEY is optional.
+- Semantic Scholar recommendations are optional and off by default. Enable them
+  only for seeds with DOI, PMID, or arXiv identifiers. An API key is optional
+  but strongly recommended because anonymous requests share a throttled pool.
 
 API keys and email addresses belong in environment variables, never config.
 Their fixed names are OPENALEX_API_KEY, OPENALEX_EMAIL, CROSSREF_EMAIL,
-NCBI_EMAIL, and NCBI_API_KEY; config cannot rename them. LitWatch hashes cache
-keys, so secrets in query strings are not stored.
+NCBI_EMAIL, NCBI_API_KEY, and SEMANTIC_SCHOLAR_API_KEY; config cannot rename
+them. LitWatch hashes cache keys, so secrets in query strings are not stored.
+
+Example source block for a biomedical watch with both optional fallbacks:
+
+~~~json
+"sources": {
+  "openalex": {"enabled": true},
+  "crossref": {"enabled": true, "enrich_limit": 10},
+  "pubmed": {"enabled": true},
+  "semantic_scholar": {"enabled": true}
+}
+~~~
+
+If OpenAlex ends with 429, LitWatch stops repeatedly calling that host for the
+rest of the run, continues these enabled sources, and reports complete=false.
+Do not use the OpenAlex website as a workaround because it uses the same API.
+Connected Papers and Litmaps are manual only: add permitted exported identifiers
+as seeds rather than scraping their pages.
 
 ## Discovery
 
-related, references, citations, and search independently enable four OpenAlex
-channels. max_per_channel and max_candidates are explicit safety bounds. A
+related and search control OpenAlex-only channels. references and citations also
+control the corresponding Crossref/PubMed channels where supported.
+max_per_channel applies per seed and channel, including the default maximum of
+100 PubMed Similar Articles; it is a cap, not a promised result count.
+max_candidates is the global safety bound. A
 report with bounded=true completed the configured search but more upstream
 matches existed. A report with complete=false suffered an API, parsing, or
 enrichment failure and must not be interpreted as “no relevant papers”.
@@ -69,7 +96,7 @@ the exact weights.
 
 accept_score and pending_score split the feed into accepted, pending, and
 rejected. The precision-biased defaults are 55 and 35. Tune them with discover
---dry-run --explain against labeled relevant/irrelevant examples; filters can
+--dry-run --summary --explain against labeled relevant/irrelevant examples; filters can
 demote an otherwise high-scoring record.
 
 ## General filters
@@ -216,6 +243,17 @@ The repository includes checksummed JCR 2025 and historical CAS 2025 snapshots
 from the public ShowJCR repository. They retain upstream terms and are not
 official certification. User-supplied editions remain local to the workspace;
 access and reuse depend on their provider and the user's terms.
+
+## Output
+
+New workspaces default to `output.include_rejected=false`. Routine rejected
+candidates remain in SQLite and `reports/library.csv` but are omitted from saved
+JSON/Markdown reports. Newly emitted publication, correction,
+expression-of-concern, and retraction events remain reportable even when the
+paper's current status is rejected. `discover --dry-run` still exposes rejected
+candidates for threshold tuning. Set `include_rejected=true` only when saved
+reports also need them; `max_rejected` then sets the per-report cap. Existing
+workspaces retain the explicit output settings in their config.
 
 ## Preset
 

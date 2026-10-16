@@ -53,6 +53,10 @@ The HTTP client refuses non-HTTPS URLs, stores only hashed cache keys, applies
 timeouts, bounded retries, and a 25 MiB response limit, and never writes API
 keys into config or reports. Local text seeds, PDF seeds, and metrics CSV files
 are also size-bounded before they are read into memory; see the README limits.
+After a terminal 429 it short-circuits later requests to the same host for that
+run; enabled independent sources can continue, but the report remains
+incomplete. Semantic Scholar keys use `SEMANTIC_SCHOLAR_API_KEY`; all source
+credentials remain environment variables.
 Structured direct-link output also rejects non-HTTPS, credential-bearing, or
 syntactically unsafe URLs. Links remain untrusted metadata and should be opened
 only after the paper identity and destination are checked.

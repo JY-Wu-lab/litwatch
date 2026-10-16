@@ -8,8 +8,8 @@
     ├── inputs/                         optional, user-created, never auto-scanned
     ├── local-metrics/                  optional, user-created, never auto-imported
     └── reports/                        after the first saved run
-        ├── YYYYMMDDTHHMMSS.ffffffZ.json
-        ├── YYYYMMDDTHHMMSS.ffffffZ.md
+        ├── YYYY-MM-DD_HH-MM-SS.ffffffZ_MODE.json
+        ├── YYYY-MM-DD_HH-MM-SS.ffffffZ_MODE.md
         ├── latest.json
         ├── latest.md
         ├── library.csv
@@ -19,11 +19,14 @@ The `reports/` directory and all files under it are created only by the first
 saved (non-dry-run) discover or watch. init creates config/database state and
 imports the bundled 2025 metric snapshots into SQLite; it does not copy their
 CSV files into the workspace. A dry run does not create or update report files.
+`--summary` only shortens dry-run stdout to counts and the top ten results; it
+does not change retrieval, ranking, or the schema of saved reports.
 
-Run files are immutable and timestamped, so two runs on one day cannot
-overwrite each other. The latest files are atomically updated copies of the
-newest saved run. library.csv and accepted_papers.xlsx are rebuilt atomically
-from SQLite.
+Run filenames include a readable UTC date, time, and mode (`discover` or
+`watch`). They are immutable and include microseconds, so two runs on one day
+cannot overwrite each other. The latest files are atomically updated copies of
+the newest saved run. library.csv and accepted_papers.xlsx are rebuilt
+atomically from SQLite.
 
 File and directory meanings:
 
@@ -35,8 +38,8 @@ File and directory meanings:
 | `.litwatch.lock` | Short-lived single-writer lock. It normally disappears when a command finishes; after a crash an old lock requires inspection before manual removal. |
 | `inputs/` | Optional user filing convention for seed files. LitWatch never scans it automatically. |
 | `local-metrics/` | Optional private location for source CSV files. Placement alone does not import them, and import stores normalized rows rather than copying the source file. |
-| timestamped `.json` | Immutable, complete structured result for one saved run. |
-| timestamped `.md` | Human-readable summary of that run; abstracts may be shortened. |
+| `date_time_mode.json` | Immutable structured report for one saved run. |
+| `date_time_mode.md` | Human-readable summary of that run; abstracts may be shortened. |
 | `latest.json`, `latest.md` | Copies of the newest saved run, replaced atomically each time. |
 | `library.csv` | Cumulative latest state of all stored works, including accepted, pending, and rejected. |
 | `accepted_papers.xlsx` | Cumulative deduplicated view of works accepted at least once; new acceptances append logically and existing rows update. |
@@ -46,7 +49,8 @@ File and directory meanings:
 Top-level fields:
 
 - schema_version: currently 1.
-- run_id: a unique UTC ID for saved runs; the literal `dry-run` for previews.
+- run_id: a readable unique UTC ID such as
+  `2026-10-16_08-30-00.123456Z_watch`; the literal `dry-run` for previews.
 - mode: `discover` or `watch`; previewing does not create a third mode.
 - complete: false when an enabled API, parser, or enrichment failed.
 - bounded: true when an explicit configured result cap was reached.
@@ -54,12 +58,16 @@ Top-level fields:
 - counts: evaluated and reported category counts.
 - accepted, pending, rejected: arrays of paper records.
 
-Counts and arrays use the report-output scope, not an all-time audit scope. A
-saved report can omit rejected records when `output.include_rejected=false` or
-truncate them at `output.max_rejected`; its `counts.rejected` is the number
-actually written. A dry-run preview is not truncated this way. Use SQLite or
-the saved `library.csv` for cumulative state; `complete=true` does not promise
-that a saved rejected array is exhaustive.
+Counts and arrays use the report-output scope, not an all-time audit scope. New
+workspaces default to `output.include_rejected=false`: routine rejected records
+are omitted, but a rejected paper with a newly emitted lifecycle event remains
+reportable. When `include_rejected=true`, `output.max_rejected` caps routine
+rejected records; `counts.rejected` is the number actually written. A
+`discover --dry-run` preview exposes rejected candidates for tuning, while a
+`watch --dry-run` preview mirrors the next watch's notification scope. Use
+SQLite or the saved `library.csv` for cumulative state; `complete=true` does
+not promise that a saved rejected array is exhaustive. Existing workspaces keep
+the explicit output settings already stored in their config.
 
 ## Cumulative table exports
 
@@ -100,8 +108,10 @@ null and missing revisions are an empty array. A date can be `YYYY`, `YYYY-MM`,
 or `YYYY-MM-DD`, preserving provider precision. Missing metadata does not prove
 that an event did not occur.
 
-`links` separates DOI, publisher, OpenAlex primary-location, open-access,
-provider-identified direct PDF, PubMed, arXiv, and OpenAlex URLs. Empty strings
+`links` separates DOI, publisher, provider primary-location, open-access,
+provider-identified direct PDF, PubMed, arXiv, OpenAlex, and Semantic Scholar
+URLs. Records and the CSV/XLSX views may also include
+`semantic_scholar_id`. Empty strings
 mean unavailable. Only validated HTTPS links are emitted in these structured
 fields; the legacy `url` remains the preferred identifier link. An
 open_access link is not necessarily a PDF. `open_access.pdf_url` exposes the
